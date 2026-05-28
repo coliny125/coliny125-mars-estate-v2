@@ -6,7 +6,7 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   const body = await req.json();
-  const updated = todoStore.update(params.id, body);
+  const updated = await todoStore.update(params.id, body);
   if (!updated) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -17,7 +17,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const deleted = todoStore.delete(params.id);
+  const deleted = await todoStore.delete(params.id);
   if (!deleted) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

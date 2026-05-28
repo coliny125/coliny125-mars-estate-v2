@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { threadStore } from "@/lib/storage";
+import { threadStore, todoStore } from "@/lib/storage";
+import type { Priority } from "@/lib/storage";
 
 const SYSTEM_PROMPT = `You are the Mars Estate Assistant — an intelligent operations co-pilot for Mars Estate, a boutique Napa Valley winery on Howell Mountain.
 
@@ -36,40 +37,55 @@ const TOOLS: Anthropic.Tool[] = [
 export async function POST(req: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ error: "Missing ANTHROPIC_API_KEY" }, { status: 500 });
+    return new Response(
+      JSON.stringify({ error: "Missing ANTHROPIC_API_KEY" }),
+      { status: 500 }
+    );
   }
 
   const body = await req.json();
   const { message, threadId: existingThreadId } = body;
 
   if (!message?.trim()) {
-    return NextResponse.json({ error: "message is required" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "message is required" }), {
+      status: 400,
+    });
   }
 
-  let thread = existingThreadId ? threadStore.get(existingThreadId) : null;
+  let thread = existingThreadId
+    ? await threadStore.get(existingThreadId)
+    : null;
   if (!thread) {
-    thread = threadStore.create();
+    thread = await threadStore.create();
   }
 
-  threadStore.addMessage(thread.id, "user", message);
+  await threadStore.addMessage(thread.id, "user", message);
 
-  const history = thread.messages.slice(0, -1).map((m) => ({
+  const fullThread = await threadStore.get(thread.id);
+  const history = (fullThread?.messages ?? []).slice(0, -1).map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
   }));
 
   const client = new Anthropic({ apiKey });
+  const threadId = thread.id;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (data: object) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+        );
       };
 
       try {
         let fullContent = "";
-        const toolCallsPending: { name: string; input: Record<string, string> }[] = [];
+        const toolCallsPending: {
+          id: string;
+          name: string;
+          input: Record<string, string>;
+        }[] = [];
 
         const messages: Anthropic.MessageParam[] = [
           ...history,
@@ -84,38 +100,34 @@ export async function POST(req: NextRequest) {
           messages,
         });
 
-        // Process tool use if any
         for (const block of response.content) {
           if (block.type === "tool_use") {
             toolCallsPending.push({
+              id: block.id,
               name: block.name,
               input: block.input as Record<string, string>,
             });
           }
         }
 
-        // Execute tool calls
-        const toolResults: Anthropic.MessageParam[] = [];
+        const toolResultContents: Anthropic.ToolResultBlockParam[] = [];
         for (const call of toolCallsPending) {
           if (call.name === "add_todo") {
             const { text, priority = "M" } = call.input;
-            await fetch(
-              `${req.nextUrl.origin}/api/todos`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text, priority }),
-              }
-            );
-            send({ content: `\n✓ Added to-do: "${text}"\n` });
-            fullContent += `\n✓ Added to-do: "${text}"\n`;
+            await todoStore.add(text, priority as Priority);
+            const msg = `Added to-do: "${text}"`;
+            send({ content: `\n✓ ${msg}\n` });
+            fullContent += `\n✓ ${msg}\n`;
+            toolResultContents.push({
+              type: "tool_result",
+              tool_use_id: call.id,
+              content: msg,
+            });
           }
         }
 
-        // Get final text response
         let textResponse = "";
         if (response.stop_reason === "tool_use" && toolCallsPending.length > 0) {
-          // Second call after tool use
           const followUp = await client.messages.create({
             model: "claude-sonnet-4-6",
             max_tokens: 512,
@@ -123,7 +135,7 @@ export async function POST(req: NextRequest) {
             messages: [
               ...messages,
               { role: "assistant", content: response.content },
-              ...toolResults,
+              { role: "user", content: toolResultContents },
             ],
           });
           for (const block of followUp.content) {
@@ -135,7 +147,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Stream text word by word for effect
         if (textResponse) {
           const words = textResponse.split(/(\s+)/);
           for (const word of words) {
@@ -147,8 +158,8 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        threadStore.addMessage(thread!.id, "assistant", fullContent);
-        send({ done: true, threadId: thread!.id });
+        await threadStore.addMessage(threadId, "assistant", fullContent);
+        send({ done: true, threadId });
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Unknown error";
@@ -164,7 +175,7 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "X-Thread-Id": thread.id,
+      "X-Thread-Id": threadId,
     },
   });
 }

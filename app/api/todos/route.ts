@@ -3,7 +3,8 @@ import { todoStore } from "@/lib/storage";
 import type { Priority } from "@/lib/storage";
 
 export async function GET() {
-  return NextResponse.json({ todos: todoStore.list() });
+  const todos = await todoStore.list();
+  return NextResponse.json({ todos });
 }
 
 export async function POST(req: NextRequest) {
@@ -13,6 +14,6 @@ export async function POST(req: NextRequest) {
   if (!text) {
     return NextResponse.json({ error: "text is required" }, { status: 400 });
   }
-  const todo = todoStore.add(text, priority);
+  const todo = await todoStore.add(text, priority);
   return NextResponse.json({ todo }, { status: 201 });
 }

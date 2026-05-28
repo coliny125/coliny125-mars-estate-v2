@@ -5,7 +5,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const thread = threadStore.get(params.id);
+  const thread = await threadStore.get(params.id);
   if (!thread) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -16,7 +16,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const deleted = threadStore.delete(params.id);
+  const deleted = await threadStore.delete(params.id);
   if (!deleted) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
