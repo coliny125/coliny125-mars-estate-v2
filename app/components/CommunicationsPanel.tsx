@@ -17,7 +17,6 @@ interface Briefing {
   generated_at: string;
   summary?: string;
   thread_count?: number;
-  meeting_count?: number;
 }
 
 const KIND_STYLES: Record<string, { dot: string; label: string }> = {
@@ -31,9 +30,20 @@ export default function CommunicationsPanel() {
   const [items, setItems] = useState<BriefItem[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHandled, setShowHandled] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
   const briefingIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/gmail/status")
+      .then((r) => r.json())
+      .then((d) => setGmailConnected(d.connected))
+      .catch(() => setGmailConnected(false));
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function load(opts: { includeHandled?: boolean } = {}) {
     setLoading(true);
@@ -44,7 +54,7 @@ export default function CommunicationsPanel() {
       if (!r.ok) throw new Error(`Error ${r.status}`);
       const data = await r.json();
       setBriefing(data.briefing);
-      setItems(data.items);
+      setItems(data.items ?? []);
       briefingIdRef.current = data.briefing?.id ?? null;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -53,10 +63,21 @@ export default function CommunicationsPanel() {
     }
   }
 
-  useEffect(() => {
-    load({ includeHandled: showHandled });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  async function triggerSync() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/briefing", { method: "POST" });
+      if (!r.ok) throw new Error(`Error ${r.status}`);
+      const data = await r.json();
+      setBriefing(data.briefing);
+      setItems(data.items ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function markHandled(id: string, handled: boolean) {
     setItems((prev) =>
@@ -70,11 +91,12 @@ export default function CommunicationsPanel() {
   }
 
   const visible = showHandled ? items : items.filter((i) => !i.handled);
+
   const subLabel = briefing
-    ? `${relativeTime(briefing.generated_at)} · ${briefing.thread_count ?? 0} threads · ${briefing.meeting_count ?? 0} meetings`
+    ? `${relativeTime(briefing.generated_at)} · ${briefing.thread_count ?? 0} threads`
     : loading
     ? "Loading…"
-    : "Daily brief · Superhuman + Granola";
+    : "No briefing yet";
 
   return (
     <section className="panel-surface rounded-sm shadow-panel transition-colors">
@@ -87,6 +109,19 @@ export default function CommunicationsPanel() {
           <div className="text-xs text-parchment-500 mt-2">{subLabel}</div>
         </div>
         <div className="shrink-0 flex items-center gap-3">
+          {gmailConnected === false && (
+            <a
+              href="/api/auth/gmail"
+              className="text-[11px] tracking-eyebrow uppercase text-brass-400 hover:text-brass-400/80 transition-colors border border-brass-500/30 rounded-sm px-2 py-1"
+            >
+              Connect Gmail
+            </a>
+          )}
+          {gmailConnected === true && (
+            <span className="text-[10px] tracking-eyebrow uppercase text-brass-500/70">
+              Gmail ✓
+            </span>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -100,25 +135,58 @@ export default function CommunicationsPanel() {
           </button>
           <button
             type="button"
-            onClick={() => load({ includeHandled: showHandled })}
-            className="text-[11px] tracking-eyebrow uppercase text-parchment-400 hover:text-parchment-100 transition-colors"
-            aria-label="Refresh"
+            onClick={triggerSync}
+            disabled={syncing}
+            className="text-[11px] tracking-eyebrow uppercase text-parchment-400 hover:text-parchment-100 disabled:opacity-40 transition-colors"
           >
-            Reload
+            {syncing ? "Syncing…" : "Reload"}
           </button>
         </div>
       </div>
       <div className="px-6 py-5 max-h-[32rem] overflow-y-auto panel-scroll">
-        {error && (
-          <p className="text-sm text-oxblood-400 mb-4">{error}</p>
-        )}
-        {!loading && !error && visible.length === 0 && (
-          <div className="text-sm text-parchment-500 italic">
-            {items.length === 0
-              ? 'Click "Reload" to pull fresh email + meetings and synthesize today\'s brief.'
-              : "Everything in today's brief has been handled."}
+        {error && <p className="text-sm text-oxblood-400 mb-4">{error}</p>}
+
+        {!loading && !briefing && !error && (
+          <div className="text-sm text-parchment-500 italic space-y-3">
+            <p>No briefing yet.</p>
+            {gmailConnected === false ? (
+              <p>
+                Connect Gmail above, then click{" "}
+                <button
+                  onClick={triggerSync}
+                  className="text-brass-400 hover:underline"
+                >
+                  Reload
+                </button>{" "}
+                to generate your first briefing.
+              </p>
+            ) : (
+              <p>
+                Click{" "}
+                <button
+                  onClick={triggerSync}
+                  className="text-brass-400 hover:underline"
+                >
+                  Reload
+                </button>{" "}
+                to pull from Gmail and generate today&apos;s brief.
+              </p>
+            )}
           </div>
         )}
+
+        {!loading && briefing && visible.length === 0 && (
+          <p className="text-sm text-parchment-500/70 italic">
+            Everything handled.
+          </p>
+        )}
+
+        {briefing?.summary && (
+          <p className="text-xs text-parchment-500 italic mb-4 border-l-2 border-brass-500/30 pl-3">
+            {briefing.summary}
+          </p>
+        )}
+
         <ul className="space-y-3">
           {visible.map((item) => {
             const style = KIND_STYLES[item.kind] ?? KIND_STYLES.update;
@@ -165,7 +233,7 @@ export default function CommunicationsPanel() {
                     onClick={() => markHandled(item.id, !item.handled)}
                     className="shrink-0 text-[10px] tracking-eyebrow uppercase text-parchment-500/50 hover:text-parchment-200 transition-colors opacity-0 group-hover:opacity-100 pt-0.5"
                   >
-                    {item.handled ? "Unmark" : "Mark handled"}
+                    {item.handled ? "Unmark" : "Handle"}
                   </button>
                 </div>
               </li>

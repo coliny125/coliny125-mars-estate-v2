@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
+import { kv } from "@vercel/kv";
+import type { StoredBriefing } from "@/app/api/cron/sync/route";
 
-// This imports the mutable module-level cache from the parent route
-// In production, use a database instead
+const BRIEFING_KEY = "briefing:latest";
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  // Note: module-level state doesn't share across route files in Next.js
-  // This is a stub — the client optimistically updates, and a real DB would persist this
-  const body = await req.json();
-  return NextResponse.json({ ok: true, id: params.id, ...body });
+  const { handled } = await req.json();
+  const briefing = await kv.get<StoredBriefing>(BRIEFING_KEY);
+  if (!briefing) {
+    return NextResponse.json({ error: "No briefing" }, { status: 404 });
+  }
+
+  const updated: StoredBriefing = {
+    ...briefing,
+    items: briefing.items.map((item) =>
+      item.id === params.id ? { ...item, handled } : item
+    ),
+  };
+  await kv.set(BRIEFING_KEY, updated);
+  return NextResponse.json({ ok: true });
 }
