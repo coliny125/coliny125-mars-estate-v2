@@ -2,7 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
-  "/api/health",
+  "/api/(.*)", // API routes handle auth at the component level
 ]);
 
 export default clerkMiddleware((auth, req) => {
