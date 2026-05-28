@@ -3,25 +3,104 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body,
+html {
+  background-color: #0e0b0a;
+  color: #ede4d3;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  background-image: radial-gradient(
+      ellipse 80% 50% at 50% -10%,
+      rgba(176, 141, 87, 0.06),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 60% 40% at 100% 100%,
+      rgba(110, 30, 30, 0.05),
+      transparent 70%
+    );
+  background-attachment: fixed;
+  min-height: 100vh;
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.025;
+  background-image: repeating-linear-gradient(
+      0deg,
+      #ede4d3 0 1px,
+      transparent 1px 3px
+    ),
+    repeating-linear-gradient(90deg, #ede4d3 0 1px, transparent 1px 3px);
+  mix-blend-mode: overlay;
+}
+
+::selection {
+  background: rgba(176, 141, 87, 0.35);
+  color: #fbf8f1;
+}
+
+@layer components {
+  .hairline {
+    border-color: rgba(237, 228, 211, 0.08);
+  }
+  .hairline-strong {
+    border-color: rgba(237, 228, 211, 0.14);
+  }
+  .panel-surface {
+    background-color: rgba(21, 17, 15, 0.6);
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(237, 228, 211, 0.08);
+  }
+  .panel-surface:hover {
+    border-color: rgba(237, 228, 211, 0.14);
+  }
+  .eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: rgba(237, 228, 211, 0.5);
+    text-transform: uppercase;
+  }
+  .wordmark {
+    text-transform: uppercase;
+    letter-spacing: 0.32em;
+    font-weight: 500;
+    font-family: var(--font-cormorant), "EB Garamond", Garamond, Georgia, serif;
+  }
+  .display-serif {
+    font-family: var(--font-cormorant), "EB Garamond", Garamond, Georgia, serif;
+    font-weight: 400;
+  }
+  .tracking-eyebrow {
+    letter-spacing: 0.18em;
+  }
+  .panel-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(237, 228, 211, 0.2) transparent;
+  }
+  .panel-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .panel-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .panel-scroll::-webkit-scrollbar-thumb {
+    background: rgba(237, 228, 211, 0.15);
+    border-radius: 3px;
+  }
+  .panel-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(176, 141, 87, 0.4);
   }
 }
