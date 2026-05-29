@@ -75,21 +75,21 @@ ${existingList}
 ## This week's emails
 ${emailContext}
 
-Identify:
-1. NEW entities (people, projects, orgs, topics) that appear this week and are NOT already in the list above.
-2. NEW relationships between any entities (use exact existing ids, or ids of your new entities).
-3. UPDATES: for EXISTING entities with notable news this week, a one-paragraph note.
+Priorities, in order:
+1. UPDATES: for EXISTING entities with genuinely notable news this week, a one-paragraph note. This is the most important output.
+2. NEW entities (people, projects, orgs, topics) that are genuinely significant and NOT already listed. Be conservative — skip one-off mentions, generic terms, and anything trivial.
+3. RELATIONSHIPS. CRITICAL RULE: every new entity you add MUST appear in at least one new_edge connecting it to an existing entity (by exact id). If you can't connect a new entity to the existing graph, DO NOT include it. No orphan nodes.
 
 Node types: person, project, org, topic
 Relations: works_at, involved_in, depends_on, related_to, owns, competes_with
 
 Return ONLY compact JSON:
 {
+  "updates":[{"id":"existing-id","note":"what changed this week"}],
   "new_nodes":[{"id":"kebab-id","type":"person","label":"Name","summary":"one sentence","sections":[{"heading":"Overview","body":"2-3 sentences"}]}],
-  "new_edges":[{"s":"id","t":"id","r":"works_at","w":3}],
-  "updates":[{"id":"existing-id","note":"what changed this week"}]
+  "new_edges":[{"s":"id","t":"id","r":"works_at","w":3}]
 }
-If a category is empty, return []. Only include genuinely new/notable items.`,
+Empty categories → []. Quality over quantity — a typical week adds 0-3 new entities and a few updates.`,
       },
     ],
   });
@@ -126,7 +126,6 @@ If a category is empty, return []. Only include genuinely new/notable items.`,
     newArticleById.set(nn.id, nn);
   }
 
-  const mergedNodes = [...graph.nodes, ...addedNodes];
   const resolve = (id: string) => (existingIds.has(id) ? id : normToId.get(norm(id)) ?? null);
 
   // ── Merge new edges (resolve endpoints, dedupe against existing) ─────────────
@@ -142,8 +141,19 @@ If a category is empty, return []. Only include genuinely new/notable items.`,
     addedEdges.push({ id: `${s}--${e.r}--${t}`, source: s, target: t, relation: e.r, weight: e.w ?? 2, last_active: now });
   }
 
+  // Safety net: drop any NEW node that ended up with no edge (orphan). Existing
+  // nodes are never dropped. This guarantees the weekly update never adds
+  // disconnected dots to the graph.
+  const connected = new Set<string>();
+  for (const e of addedEdges) { connected.add(e.source); connected.add(e.target); }
+  for (const e of graph.edges) { connected.add(e.source); connected.add(e.target); }
+  const keptAddedNodes = addedNodes.filter((n) => connected.has(n.id));
+  for (const n of addedNodes) {
+    if (!connected.has(n.id)) newArticleById.delete(n.id);
+  }
+
   const mergedGraph: GraphData = {
-    nodes: mergedNodes,
+    nodes: [...graph.nodes, ...keptAddedNodes],
     edges: [...graph.edges, ...addedEdges],
     built_at: now,
   };
@@ -191,7 +201,7 @@ If a category is empty, return []. Only include genuinely new/notable items.`,
   return {
     ok: true,
     emails_scanned: threads.length,
-    new_nodes: addedNodes.length,
+    new_nodes: keptAddedNodes.length,
     new_edges: addedEdges.length,
     updated_entries: updatedCount,
   };
