@@ -1,19 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
-
-export type GoalStatus = "on_track" | "at_risk" | "completed" | "blocked";
-
-export interface Goal {
-  id: string;
-  title: string;
-  description: string;
-  target?: string;
-  status: GoalStatus;
-  notes?: string;
-  updated_at: string;
-}
-
-export const GOALS_KEY = "goals:list";
+import { getGoals, saveGoals } from "@/lib/goals";
+import type { Goal, GoalStatus } from "@/lib/goals";
 
 const SEED_GOALS: Goal[] = [
   {
@@ -90,16 +77,6 @@ const SEED_GOALS: Goal[] = [
   },
 ];
 
-async function getGoals(): Promise<Goal[]> {
-  const raw = await kv.get<string>(GOALS_KEY);
-  if (!raw) return [];
-  return typeof raw === "string" ? JSON.parse(raw) : (raw as Goal[]);
-}
-
-async function saveGoals(goals: Goal[]): Promise<void> {
-  await kv.set(GOALS_KEY, JSON.stringify(goals));
-}
-
 export async function GET() {
   let goals = await getGoals();
   if (goals.length === 0) {
@@ -117,7 +94,7 @@ export async function POST(req: NextRequest) {
     title: body.title,
     description: body.description ?? "",
     target: body.target,
-    status: body.status ?? "on_track",
+    status: (body.status as GoalStatus) ?? "on_track",
     notes: body.notes,
     updated_at: new Date().toISOString(),
   };

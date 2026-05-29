@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Goal, GoalStatus } from "@/app/api/goals/route";
+import type { Goal, GoalStatus } from "@/lib/goals";
 
 const STATUS_CONFIG: Record<GoalStatus, { dot: string; label: string }> = {
   on_track: { dot: "bg-brass-500", label: "On Track" },
