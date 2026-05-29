@@ -20,11 +20,17 @@ export interface WikiRelation {
   phrasing: string; // e.g. "works at"
 }
 
+export interface WikiSection {
+  heading: string;
+  body: string;
+}
+
 export interface WikiEntry {
   id: string;
   label: string;
   type: NodeType;
-  definition: string;
+  summary: string; // one-line lead definition
+  sections: WikiSection[]; // richer multi-section article
   email?: string;
   related: WikiRelation[];
   mention_count: number;
@@ -69,17 +75,23 @@ export function deriveWikiFromGraph(graph: GraphData): WikiData {
   }
 
   const entries: WikiEntry[] = graph.nodes
-    .map((n) => ({
-      id: n.id,
-      label: n.label,
-      type: n.type,
-      definition: n.description?.trim() || `${n.label} — ${n.type} in the Mars Estate operations graph.`,
-      email: n.email,
-      related: (relatedByNode.get(n.id) ?? []).sort((a, b) =>
-        a.label.localeCompare(b.label)
-      ),
-      mention_count: n.mention_count ?? 0,
-    }))
+    .map((n) => {
+      const summary =
+        n.description?.trim() ||
+        `${n.label} — ${n.type} in the Mars Estate operations graph.`;
+      return {
+        id: n.id,
+        label: n.label,
+        type: n.type,
+        summary,
+        sections: [{ heading: "Overview", body: summary }],
+        email: n.email,
+        related: (relatedByNode.get(n.id) ?? []).sort((a, b) =>
+          a.label.localeCompare(b.label)
+        ),
+        mention_count: n.mention_count ?? 0,
+      };
+    })
     .sort((a, b) => a.label.localeCompare(b.label));
 
   return { entries, generated_at: new Date().toISOString() };

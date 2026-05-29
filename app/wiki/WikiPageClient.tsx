@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import Link from "next/link";
 import { relativeTime } from "@/lib/date";
 import type { WikiData, WikiEntry } from "@/lib/wiki";
@@ -66,7 +66,8 @@ export default function WikiPageClient() {
       if (!q) return true;
       return (
         e.label.toLowerCase().includes(q) ||
-        e.definition.toLowerCase().includes(q)
+        e.summary.toLowerCase().includes(q) ||
+        e.sections.some((s) => s.body.toLowerCase().includes(q))
       );
     });
   }, [entries, query, typeFilter]);
@@ -84,6 +85,51 @@ export default function WikiPageClient() {
     }
     return Array.from(groups.entries());
   }, [selected]);
+
+  // For inline backlinks: a single regex of all entity labels (longest first
+  // so multi-word names win), plus a label→id lookup.
+  const { linkRegex, labelToId } = useMemo(() => {
+    const labelToId = new Map<string, string>();
+    const labels = entries
+      .map((e) => e.label)
+      .filter((l) => l.length >= 4) // skip tiny labels that cause noise
+      .sort((a, b) => b.length - a.length);
+    for (const e of entries) labelToId.set(e.label.toLowerCase(), e.id);
+    if (labels.length === 0) return { linkRegex: null as RegExp | null, labelToId };
+    const escaped = labels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const linkRegex = new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+    return { linkRegex, labelToId };
+  }, [entries]);
+
+  // Render text with entity labels turned into clickable links (skips self).
+  function LinkedText({ text, selfId }: { text: string; selfId: string }) {
+    if (!linkRegex) return <>{text}</>;
+    const out: React.ReactNode[] = [];
+    let last = 0;
+    linkRegex.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    let key = 0;
+    while ((m = linkRegex.exec(text)) !== null) {
+      const matchId = labelToId.get(m[0].toLowerCase());
+      if (matchId && matchId !== selfId) {
+        if (m.index > last) out.push(<Fragment key={key++}>{text.slice(last, m.index)}</Fragment>);
+        const id = matchId;
+        out.push(
+          <button
+            key={key++}
+            type="button"
+            onClick={() => setSelectedId(id)}
+            className="text-brass-400 hover:text-brass-300 hover:underline"
+          >
+            {m[0]}
+          </button>
+        );
+        last = m.index + m[0].length;
+      }
+    }
+    if (last < text.length) out.push(<Fragment key={key++}>{text.slice(last)}</Fragment>);
+    return <>{out}</>;
+  }
 
   return (
     <div className="h-screen bg-[#0e0b0a] flex flex-col overflow-hidden">
@@ -212,9 +258,20 @@ export default function WikiPageClient() {
                   </a>
                 )}
 
-                <p className="text-base text-parchment-300 leading-relaxed mt-4 border-l-2 border-brass-500/30 pl-4">
-                  {selected.definition}
+                <p className="text-base text-parchment-200 leading-relaxed mt-4 border-l-2 border-brass-500/30 pl-4">
+                  <LinkedText text={selected.summary} selfId={selected.id} />
                 </p>
+
+                {selected.sections
+                  .filter((s) => s.heading.toLowerCase() !== "overview" || s.body !== selected.summary)
+                  .map((s, i) => (
+                    <div key={i} className="mt-6">
+                      <div className="eyebrow mb-1.5">{s.heading}</div>
+                      <p className="text-sm text-parchment-300 leading-relaxed whitespace-pre-line">
+                        <LinkedText text={s.body} selfId={selected.id} />
+                      </p>
+                    </div>
+                  ))}
 
                 {groupedRelations.length > 0 && (
                   <div className="mt-8">
@@ -249,7 +306,7 @@ export default function WikiPageClient() {
 
                 <div className="mt-8 pt-4 border-t hairline">
                   <Link
-                    href="/graph"
+                    href={`/graph?node=${encodeURIComponent(selected.id)}`}
                     className="text-[11px] tracking-eyebrow uppercase text-brass-400 hover:text-brass-400/80 transition-colors"
                   >
                     View this entity in the graph →

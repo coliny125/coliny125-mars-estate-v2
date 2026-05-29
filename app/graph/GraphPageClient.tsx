@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { relativeTime } from "@/lib/date";
@@ -46,6 +47,8 @@ export default function GraphPageClient() {
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const deepLinkNode = searchParams.get("node");
 
   useEffect(() => {
     fetch("/api/graph")
@@ -55,6 +58,14 @@ export default function GraphPageClient() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // Deep link: /graph?node=<id> opens that entity's 360° drawer once data is ready.
+  useEffect(() => {
+    if (deepLinkNode && graphData?.nodes.some((n) => n.id === deepLinkNode)) {
+      openNode(deepLinkNode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkNode, graphData]);
 
   async function buildGraph() {
     setBuilding(true);
