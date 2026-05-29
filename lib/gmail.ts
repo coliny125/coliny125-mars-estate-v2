@@ -159,7 +159,7 @@ export async function fetchRecentThreads(
   );
   const listData = await listRes.json();
   const threadIds: string[] = (listData.threads ?? [])
-    .slice(0, 30)
+    .slice(0, 20)
     .map((t: { id: string }) => t.id);
 
   // Fetch all threads in parallel

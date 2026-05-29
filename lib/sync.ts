@@ -99,10 +99,10 @@ Return JSON: { "summary": "...", "items": [...] }`;
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 16000,
+    max_tokens: 8000,
     thinking: {
       type: "enabled",
-      budget_tokens: 10000,
+      budget_tokens: 5000,
     },
     messages: [{ role: "user", content: prompt }],
   });

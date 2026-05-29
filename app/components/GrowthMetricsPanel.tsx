@@ -10,6 +10,8 @@ export default function GrowthMetricsPanel() {
   const [loading, setLoading] = useState(true);
   const [assessing, setAssessing] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [draft, setDraft] = useState<PinnedGoal[]>([]);
 
   useEffect(() => {
@@ -37,18 +39,28 @@ export default function GrowthMetricsPanel() {
 
   function startEdit() {
     setDraft(goals.map((g) => ({ ...g })));
+    setSaveError(null);
     setEditing(true);
   }
 
   async function saveEdit() {
-    const r = await fetch("/api/goals/pinned", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goals: draft }),
-    });
-    const data = await r.json();
-    setGoals(data.goals);
-    setEditing(false);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const r = await fetch("/api/goals/pinned", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goals: draft }),
+      });
+      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      const data = await r.json();
+      setGoals(data.goals ?? draft);
+      setEditing(false);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const assessMap = new Map<string, GoalAssessment>(
@@ -125,12 +137,16 @@ export default function GrowthMetricsPanel() {
                 />
               </div>
             ))}
+            {saveError && (
+              <p className="text-xs text-oxblood-400">{saveError}</p>
+            )}
             <button
               type="button"
               onClick={saveEdit}
-              className="text-[11px] tracking-eyebrow uppercase border hairline-strong rounded-sm px-3 py-1.5 text-parchment-100 hover:bg-ink-700 transition-colors"
+              disabled={saving}
+              className="text-[11px] tracking-eyebrow uppercase border hairline-strong rounded-sm px-3 py-1.5 text-parchment-100 hover:bg-ink-700 disabled:opacity-40 transition-colors"
             >
-              Save
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         ) : (
