@@ -102,12 +102,16 @@ export async function buildGraph(
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
-  // Load all KB docs — use allSettled so a single KV failure doesn't abort the whole build
+  // Load all KB docs — cap each doc at 800 chars (entities appear early)
+  // Use allSettled so a single KV failure doesn't abort the whole build
+  const DOC_CHAR_CAP = 800;
   const index = await getKBIndex();
   const settled = await Promise.allSettled(
     index.map(async (entry) => {
       const doc = await getKBDoc(entry.slug);
-      return doc ? `## ${doc.title} (${entry.slug})\n${doc.content}` : null;
+      if (!doc) return null;
+      const excerpt = doc.content.slice(0, DOC_CHAR_CAP);
+      return `## ${doc.title} [${entry.section}]\n${excerpt}`;
     })
   );
   const rawDocs = settled
@@ -115,12 +119,7 @@ export async function buildGraph(
     .map((r) => r.value)
     .filter((v): v is string => v !== null);
 
-  // Cap total KB context at 60k chars to keep the prompt manageable
-  const MAX_KB_CHARS = 60_000;
-  let kbContext = rawDocs.join("\n\n---\n\n");
-  if (kbContext.length > MAX_KB_CHARS) {
-    kbContext = kbContext.slice(0, MAX_KB_CHARS) + "\n\n[...truncated for length]";
-  }
+  const kbContext = rawDocs.join("\n\n---\n\n");
 
   const activityContext = [
     opts.briefingItems?.length
@@ -135,7 +134,7 @@ export async function buildGraph(
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 8000,
+    max_tokens: 5000,
     messages: [
       {
         role: "user",
