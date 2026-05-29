@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 import { runSync, BRIEFING_KEY } from "@/lib/sync";
 import { autoRunResearch, isResearchStale } from "@/lib/research";
+import { autoAssessGoals, areGoalsStale } from "@/lib/goals";
 import type { StoredBriefing } from "@/lib/sync";
 
 export const maxDuration = 60;
@@ -15,12 +16,24 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const stale = await isResearchStale(20);
+    const [researchStale, goalsStale] = await Promise.all([
+      isResearchStale(20),
+      areGoalsStale(20),
+    ]);
+
+    // Briefing always runs; research + goals run once per day when stale
     const [briefing] = await Promise.all([
       runSync(),
-      stale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
+      researchStale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
+      goalsStale ? autoAssessGoals().catch(() => null) : Promise.resolve(null),
     ]);
-    return NextResponse.json({ ok: true, briefing, research_refreshed: stale });
+
+    return NextResponse.json({
+      ok: true,
+      briefing,
+      research_refreshed: researchStale,
+      goals_refreshed: goalsStale,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Sync failed" },
