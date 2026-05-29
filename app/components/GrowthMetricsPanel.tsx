@@ -8,6 +8,7 @@ export default function GrowthMetricsPanel() {
   const [goals, setGoals] = useState<PinnedGoal[]>([]);
   const [assessment, setAssessment] = useState<GoalsAssessment | null>(null);
   const [loading, setLoading] = useState(true);
+  const [assessing, setAssessing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<PinnedGoal[]>([]);
 
@@ -20,6 +21,19 @@ export default function GrowthMetricsPanel() {
       setAssessment(assessmentData.assessment ?? null);
     }).finally(() => setLoading(false));
   }, []);
+
+  async function runAssessment() {
+    setAssessing(true);
+    try {
+      const r = await fetch("/api/goals/assessment", { method: "POST" });
+      if (r.ok) {
+        const data = await r.json();
+        setAssessment(data.assessment);
+      }
+    } finally {
+      setAssessing(false);
+    }
+  }
 
   function startEdit() {
     setDraft(goals.map((g) => ({ ...g })));
@@ -57,7 +71,17 @@ export default function GrowthMetricsPanel() {
           </h2>
           <div className="text-xs text-parchment-500 mt-2">{subLabel}</div>
         </div>
-        <div className="shrink-0">
+        <div className="shrink-0 flex items-center gap-3">
+          {!editing && (
+            <button
+              type="button"
+              onClick={runAssessment}
+              disabled={assessing}
+              className="text-[11px] tracking-eyebrow uppercase text-brass-400 hover:text-brass-400/80 disabled:opacity-40 transition-colors"
+            >
+              {assessing ? "Assessing…" : "Assess now"}
+            </button>
+          )}
           <button
             type="button"
             onClick={editing ? () => setEditing(false) : startEdit}

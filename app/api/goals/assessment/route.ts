@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
-import { GOALS_ASSESSMENT_KEY } from "@/lib/goals";
+import { GOALS_ASSESSMENT_KEY, autoAssessPinnedGoals } from "@/lib/goals";
 import type { GoalsAssessment } from "@/lib/goals";
 
 export async function GET() {
@@ -10,5 +10,12 @@ export async function GET() {
       ? JSON.parse(raw)
       : (raw as GoalsAssessment)
     : null;
+  return NextResponse.json({ assessment });
+}
+
+export const maxDuration = 60;
+
+export async function POST() {
+  const assessment = await autoAssessPinnedGoals();
   return NextResponse.json({ assessment });
 }
