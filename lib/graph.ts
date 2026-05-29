@@ -132,15 +132,39 @@ export async function buildGraph(
     .filter(Boolean)
     .join("\n\n");
 
-  // Compact schema (short keys) keeps output small enough to finish without
-  // truncation. Measured: ~109 nodes / 125 edges completes in ~100s at 8000 tokens.
-  const response = await client.messages.create({
+  type RawNode = { id: string; type: NodeType; label: string; desc?: string; email?: string };
+  type RawEdge = { s: string; t: string; r: RelationType; w?: number };
+
+  function parseJson<T>(text: string, key: "nodes" | "edges"): T[] {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return [];
+    try {
+      const parsed = JSON.parse(match[0]);
+      return (parsed[key] ?? []) as T[];
+    } catch {
+      // Salvage the array alone if the object is truncated
+      const arrMatch = match[0].match(new RegExp(`"${key}"\\s*:\\s*(\\[[\\s\\S]*\\])`));
+      if (arrMatch) {
+        // Trim to the last complete object in the array
+        const trimmed = arrMatch[1].replace(/,\s*\{[^}]*$/, "") + (arrMatch[1].trimEnd().endsWith("]") ? "" : "]");
+        try {
+          return JSON.parse(trimmed) as T[];
+        } catch {
+          return [];
+        }
+      }
+      return [];
+    }
+  }
+
+  // ── Call 1: extract nodes ───────────────────────────────────────────────────
+  const nodesResp = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 8000,
+    max_tokens: 6000,
     messages: [
       {
         role: "user",
-        content: `You are building a knowledge graph for Mars Estate, a Napa Valley winery. Extract all meaningful entities and relationships from the documents below.
+        content: `Extract knowledge-graph NODES for Mars Estate, a Napa Valley winery. Capture every significant person, project, organization, and strategic topic from the material below.
 
 ## Knowledge base
 ${kbContext}
@@ -148,58 +172,59 @@ ${kbContext}
 ## Recent activity
 ${activityContext || "None"}
 
-Extract:
-- NODES: every significant person, project, organization, and strategic topic.
-- EDGES: relationships between nodes (who works where, who's involved in what project, what depends on what, related topics).
-
 Node types: person, project, org, topic
-Relation types: works_at, involved_in, depends_on, related_to, owns, competes_with
 
-Return ONLY valid compact JSON. Use short keys to save space. Keep "desc" to max 8 words. Omit "email" if unknown. Edge "w" is weight 1-5 (5 = core relationship).
-{
-  "nodes": [
-    {"id":"kebab-id","type":"person","label":"Display Name","desc":"short phrase","email":"x@y.com"}
-  ],
-  "edges": [
-    {"s":"source-id","t":"target-id","r":"works_at","w":3}
-  ]
-}
+Return ONLY compact JSON. "desc" max 6 words. Omit "email" if unknown.
+{"nodes":[{"id":"kebab-id","type":"person","label":"Display Name","desc":"short","email":"x@y.com"}]}
 
-Be thorough — include all named people from contacts, all named projects, all organizations, and all major strategic themes as topic nodes.`,
+Be thorough — all named people from contacts, all projects, all orgs, all major strategic themes.`,
       },
     ],
   });
-
-  const textBlock = response.content.find((b) => b.type === "text");
-  const text = textBlock?.type === "text" ? textBlock.text : "";
-
-  type RawNode = { id: string; type: NodeType; label: string; desc?: string; email?: string };
-  type RawEdge = { s: string; t: string; r: RelationType; w?: number };
-
-  let raw: { nodes?: RawNode[]; edges?: RawEdge[] };
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON object found in graph builder response");
-  try {
-    raw = JSON.parse(match[0]);
-  } catch {
-    // Salvage a truncated response by parsing the nodes array alone
-    const nodesMatch = match[0].match(/"nodes"\s*:\s*(\[[\s\S]*?\])\s*(?:,|\})/);
-    if (nodesMatch) {
-      try {
-        raw = { nodes: JSON.parse(nodesMatch[1]), edges: [] };
-      } catch {
-        throw new Error("Graph response could not be parsed — try Rebuild again.");
-      }
-    } else {
-      throw new Error("Graph response malformed — try Rebuild again.");
-    }
+  const nodesText =
+    nodesResp.content.find((b) => b.type === "text")?.type === "text"
+      ? (nodesResp.content.find((b) => b.type === "text") as { text: string }).text
+      : "";
+  const rawNodes = parseJson<RawNode>(nodesText, "nodes");
+  if (rawNodes.length === 0) {
+    throw new Error("Graph builder returned no nodes — try Rebuild again.");
   }
 
-  const now = new Date().toISOString();
-  const rawNodes = raw.nodes ?? [];
-  const rawEdges = raw.edges ?? [];
+  // ── Call 2: extract edges given the node list ────────────────────────────────
+  const nodeList = rawNodes
+    .map((n) => `${n.id} (${n.type}: ${n.label})`)
+    .join("\n");
 
-  // Compute degree (connection count) per node — used as the "heat" metric
+  const edgesResp = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 6000,
+    messages: [
+      {
+        role: "user",
+        content: `Given these Mars Estate entities, identify the relationships (edges) between them. Use the exact ids shown.
+
+## Entities
+${nodeList}
+
+Relation types: works_at, involved_in, depends_on, related_to, owns, competes_with
+Edge weight "w" 1-5 (5 = core relationship).
+
+Return ONLY compact JSON:
+{"edges":[{"s":"source-id","t":"target-id","r":"works_at","w":3}]}
+
+Be thorough — connect each person to their org, each person to projects they touch, related projects and topics, and dependencies between projects.`,
+      },
+    ],
+  });
+  const edgesText =
+    edgesResp.content.find((b) => b.type === "text")?.type === "text"
+      ? (edgesResp.content.find((b) => b.type === "text") as { text: string }).text
+      : "";
+  const rawEdges = parseJson<RawEdge>(edgesText, "edges");
+
+  const now = new Date().toISOString();
+
+  // Degree (connection count) → "heat" metric
   const degree: Record<string, number> = {};
   for (const e of rawEdges) {
     degree[e.s] = (degree[e.s] ?? 0) + 1;
@@ -219,7 +244,6 @@ Be thorough — include all named people from contacts, all named projects, all 
       sources: [],
       mention_count: degree[n.id] ?? 0,
     })),
-    // Drop edges that reference nodes we didn't keep (truncation safety)
     edges: rawEdges
       .filter((e) => validNodeIds.has(e.s) && validNodeIds.has(e.t))
       .map((e) => ({

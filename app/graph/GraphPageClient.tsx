@@ -136,14 +136,13 @@ export default function GraphPageClient() {
     [overlay, now]
   );
 
+  // Node radius in graph units. Scales with degree under the heat overlay.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const getNodeSize = useCallback(
+  const getNodeRadius = useCallback(
     (node: any) => {
       const n = node as GraphNode;
-      if (overlay === "heat") {
-        return 3 + Math.min((n.mention_count ?? 1) * 0.8, 10);
-      }
-      return 4;
+      const base = 5 + Math.min((n.mention_count ?? 0) * 0.7, 9);
+      return overlay === "heat" ? base + 1 : base;
     },
     [overlay]
   );
@@ -154,16 +153,16 @@ export default function GraphPageClient() {
       const e = edge as GraphEdge;
       if (overlay === "stale") {
         const age = now - new Date(e.last_active).getTime();
-        return age > THIRTY_DAYS_MS ? "rgba(80,80,80,0.3)" : "rgba(176,141,87,0.25)";
+        return age > THIRTY_DAYS_MS ? "rgba(120,120,120,0.35)" : "rgba(176,141,87,0.55)";
       }
-      return "rgba(176,141,87,0.2)";
+      return "rgba(176,141,87,0.55)";
     },
     [overlay, now]
   );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const getLinkWidth = useCallback(
-    (edge: any) => Math.max(0.5, ((edge as GraphEdge).weight ?? 1) * 0.4),
+    (edge: any) => Math.max(1, ((edge as GraphEdge).weight ?? 2) * 0.7),
     []
   );
 
@@ -292,38 +291,56 @@ export default function GraphPageClient() {
             <ForceGraph2D
               graphData={displayData}
               nodeId="id"
-              nodeLabel="label"
-              nodeColor={getNodeColor}
-              nodeVal={getNodeSize}
+              nodeLabel=""
               linkColor={getLinkColor}
               linkWidth={getLinkWidth}
               linkLabel="relation"
+              linkDirectionalParticles={0}
               backgroundColor="#0e0b0a"
+              cooldownTicks={120}
+              nodeRelSize={1}
+              enableNodeDrag={true}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               onNodeClick={(node: any) => openNode((node as GraphNode).id)}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               nodeCanvasObject={(node: any, ctx, globalScale) => {
                 const n = node as GraphNode & { x: number; y: number };
-                const size = getNodeSize(n);
+                const r = getNodeRadius(n);
                 const color = getNodeColor(n);
 
+                // node circle with subtle ring
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, size, 0, 2 * Math.PI);
+                ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
                 ctx.fillStyle = color;
                 ctx.fill();
+                ctx.lineWidth = 1 / globalScale;
+                ctx.strokeStyle = "rgba(14,11,10,0.8)";
+                ctx.stroke();
 
-                if (globalScale >= 1.5) {
-                  const label = n.label;
-                  const fontSize = Math.max(8 / globalScale, 5);
-                  ctx.font = `${fontSize}px sans-serif`;
-                  ctx.fillStyle = "rgba(244,238,226,0.85)";
+                // labels show once zoomed past a threshold
+                if (globalScale >= 1.2) {
+                  const fontSize = Math.max(10 / globalScale, 3.5);
+                  ctx.font = `${fontSize}px ui-sans-serif, sans-serif`;
+                  ctx.fillStyle = "rgba(244,238,226,0.9)";
                   ctx.textAlign = "center";
-                  ctx.fillText(label, n.x, n.y + size + fontSize + 1);
+                  ctx.textBaseline = "top";
+                  ctx.fillText(n.label, n.x, n.y + r + 1.5);
                 }
+              }}
+              // Hit-area paint — REQUIRED for click/drag/hover with a custom
+              // nodeCanvasObject. Without this, pointer events never land on nodes.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              nodePointerAreaPaint={(node: any, color, ctx) => {
+                const n = node as GraphNode & { x: number; y: number };
+                const r = getNodeRadius(n);
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, r + 2, 0, 2 * Math.PI);
+                ctx.fill();
               }}
             />
             <p className="absolute bottom-3 left-0 right-0 text-center text-[10px] tracking-eyebrow uppercase text-parchment-500/40 pointer-events-none">
-              Click any node for 360° view · Scroll to zoom · Drag to pan
+              Click a node for 360° view · Drag nodes to rearrange · Scroll to zoom
             </p>
           </div>
 
