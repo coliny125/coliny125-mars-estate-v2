@@ -36,6 +36,12 @@ export default function Header() {
               Graph
             </Link>
             <Link
+              href="/wiki"
+              className="text-[11px] tracking-eyebrow uppercase text-parchment-400 hover:text-parchment-100 transition-colors"
+            >
+              Wiki
+            </Link>
+            <Link
               href="/settings"
               className="text-[11px] tracking-eyebrow uppercase text-parchment-400 hover:text-parchment-100 transition-colors"
             >
