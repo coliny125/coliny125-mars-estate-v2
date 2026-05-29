@@ -6,7 +6,7 @@ import { kv } from "@vercel/kv";
 import { briefingKey } from "@/lib/sync";
 import type { StoredBriefing } from "@/lib/sync";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST() {
   const auth = getUserId();

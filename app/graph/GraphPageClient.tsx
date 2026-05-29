@@ -196,6 +196,11 @@ export default function GraphPageClient() {
           {buildError && (
             <span className="text-xs text-oxblood-400">{buildError}</span>
           )}
+          {building && (
+            <span className="text-xs text-parchment-500 animate-pulse">
+              Extracting entities — up to ~2 min…
+            </span>
+          )}
           <button
             type="button"
             onClick={buildGraph}
@@ -213,7 +218,9 @@ export default function GraphPageClient() {
             No graph yet. Click <strong className="text-parchment-100">Build graph</strong> to extract
             entities from your knowledge base, briefing, and todos.
           </p>
-          <p className="text-parchment-500/60 text-xs">Takes ~30 seconds.</p>
+          <p className="text-parchment-500/60 text-xs">
+            Takes up to ~2 minutes — extracts ~100 entities and their relationships.
+          </p>
         </div>
       ) : (
         <div className="flex-1 flex min-h-0 relative">

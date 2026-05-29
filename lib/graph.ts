@@ -132,9 +132,11 @@ export async function buildGraph(
     .filter(Boolean)
     .join("\n\n");
 
+  // Compact schema (short keys) keeps output small enough to finish without
+  // truncation. Measured: ~109 nodes / 125 edges completes in ~100s at 8000 tokens.
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 5000,
+    max_tokens: 8000,
     messages: [
       {
         role: "user",
@@ -147,35 +149,19 @@ ${kbContext}
 ${activityContext || "None"}
 
 Extract:
-- NODES: Every significant person, project, organization, and strategic topic. For each, note where they appear.
-- EDGES: Relationships between nodes — who works where, who's involved in what project, what projects depend on each other, what topics are connected.
+- NODES: every significant person, project, organization, and strategic topic.
+- EDGES: relationships between nodes (who works where, who's involved in what project, what depends on what, related topics).
 
-Node types: "person", "project", "org", "topic"
-Edge relation types: "works_at", "involved_in", "depends_on", "related_to", "owns", "mentions", "competes_with"
+Node types: person, project, org, topic
+Relation types: works_at, involved_in, depends_on, related_to, owns, competes_with
 
-Edge weight 1–5: how strong/frequent the relationship is (5 = core relationship, 1 = passing mention).
-
-Return ONLY valid JSON:
+Return ONLY valid compact JSON. Use short keys to save space. Keep "desc" to max 8 words. Omit "email" if unknown. Edge "w" is weight 1-5 (5 = core relationship).
 {
   "nodes": [
-    {
-      "id": "kebab-case-unique-id",
-      "type": "person|project|org|topic",
-      "label": "Display Name",
-      "description": "One sentence about this entity",
-      "email": "email if person and known, else omit",
-      "sources": ["slug or briefing/todos"],
-      "mention_count": <integer>
-    }
+    {"id":"kebab-id","type":"person","label":"Display Name","desc":"short phrase","email":"x@y.com"}
   ],
   "edges": [
-    {
-      "id": "source-id--relation--target-id",
-      "source": "node-id",
-      "target": "node-id",
-      "relation": "works_at|involved_in|depends_on|related_to|owns|mentions|competes_with",
-      "weight": <1-5>
-    }
+    {"s":"source-id","t":"target-id","r":"works_at","w":3}
   ]
 }
 
@@ -187,33 +173,63 @@ Be thorough — include all named people from contacts, all named projects, all 
   const textBlock = response.content.find((b) => b.type === "text");
   const text = textBlock?.type === "text" ? textBlock.text : "";
 
-  // Find the outermost JSON object — try full match first, then truncation recovery
-  let extracted: { nodes: Omit<GraphNode, "last_seen">[]; edges: Omit<GraphEdge, "last_active">[] };
+  type RawNode = { id: string; type: NodeType; label: string; desc?: string; email?: string };
+  type RawEdge = { s: string; t: string; r: RelationType; w?: number };
+
+  let raw: { nodes?: RawNode[]; edges?: RawEdge[] };
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("No JSON object found in graph builder response");
   try {
-    extracted = JSON.parse(match[0]);
+    raw = JSON.parse(match[0]);
   } catch {
-    // Response was likely cut off — try to salvage by closing the JSON manually
-    const partial = match[0];
-    // Find how many nodes we got and return them without edges
-    const nodesMatch = partial.match(/"nodes"\s*:\s*(\[[\s\S]*?\])/);
+    // Salvage a truncated response by parsing the nodes array alone
+    const nodesMatch = match[0].match(/"nodes"\s*:\s*(\[[\s\S]*?\])\s*(?:,|\})/);
     if (nodesMatch) {
       try {
-        extracted = { nodes: JSON.parse(nodesMatch[1]), edges: [] };
+        raw = { nodes: JSON.parse(nodesMatch[1]), edges: [] };
       } catch {
-        throw new Error("Graph builder response could not be parsed. Try again.");
+        throw new Error("Graph response could not be parsed — try Rebuild again.");
       }
     } else {
-      throw new Error("Graph builder response malformed. Try again.");
+      throw new Error("Graph response malformed — try Rebuild again.");
     }
   }
 
   const now = new Date().toISOString();
+  const rawNodes = raw.nodes ?? [];
+  const rawEdges = raw.edges ?? [];
+
+  // Compute degree (connection count) per node — used as the "heat" metric
+  const degree: Record<string, number> = {};
+  for (const e of rawEdges) {
+    degree[e.s] = (degree[e.s] ?? 0) + 1;
+    degree[e.t] = (degree[e.t] ?? 0) + 1;
+  }
+
+  const validNodeIds = new Set(rawNodes.map((n) => n.id));
 
   const graph: GraphData = {
-    nodes: (extracted.nodes ?? []).map((n: Omit<GraphNode, "last_seen">) => ({ ...n, last_seen: now })),
-    edges: (extracted.edges ?? []).map((e: Omit<GraphEdge, "last_active">) => ({ ...e, last_active: now })),
+    nodes: rawNodes.map((n) => ({
+      id: n.id,
+      type: n.type,
+      label: n.label,
+      description: n.desc,
+      email: n.email,
+      last_seen: now,
+      sources: [],
+      mention_count: degree[n.id] ?? 0,
+    })),
+    // Drop edges that reference nodes we didn't keep (truncation safety)
+    edges: rawEdges
+      .filter((e) => validNodeIds.has(e.s) && validNodeIds.has(e.t))
+      .map((e) => ({
+        id: `${e.s}--${e.r}--${e.t}`,
+        source: e.s,
+        target: e.t,
+        relation: e.r,
+        weight: e.w ?? 2,
+        last_active: now,
+      })),
     built_at: now,
   };
 
