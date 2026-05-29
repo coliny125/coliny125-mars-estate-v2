@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     const [briefing] = await Promise.all([
       runSync({ extended: true }),
       researchStale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
-      goalsStale ? autoAssessPinnedGoals().catch(() => null) : Promise.resolve(null),
+      goalsStale ? autoAssessPinnedGoals({ extended: true }).catch(() => null) : Promise.resolve(null),
     ]);
 
     return NextResponse.json({

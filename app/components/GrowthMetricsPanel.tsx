@@ -10,6 +10,7 @@ export default function GrowthMetricsPanel() {
   const [assessment, setAssessment] = useState<GoalsAssessment | null>(null);
   const [loading, setLoading] = useState(true);
   const [assessing, setAssessing] = useState(false);
+  const [assessError, setAssessError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -27,12 +28,14 @@ export default function GrowthMetricsPanel() {
 
   async function runAssessment() {
     setAssessing(true);
+    setAssessError(null);
     try {
       const r = await fetch("/api/goals/assessment", { method: "POST" });
-      if (r.ok) {
-        const data = await r.json();
-        setAssessment(data.assessment);
-      }
+      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      const data = await r.json();
+      setAssessment(data.assessment);
+    } catch (e) {
+      setAssessError(e instanceof Error ? e.message : "Assessment failed");
     } finally {
       setAssessing(false);
     }
@@ -68,7 +71,9 @@ export default function GrowthMetricsPanel() {
     (assessment?.assessments ?? []).map((a) => [a.goal_id, a])
   );
 
-  const subLabel = assessment
+  const subLabel = assessError
+    ? assessError
+    : assessment
     ? `Assessed ${relativeTime(assessment.generated_at)}`
     : loading
     ? "Loading…"

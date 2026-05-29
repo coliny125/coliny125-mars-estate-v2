@@ -60,7 +60,7 @@ const KB_SLUGS_FOR_GOALS = [
   "brand-marketing/lifestyle-brand-strategy",
 ];
 
-export async function autoAssessPinnedGoals(): Promise<GoalsAssessment> {
+export async function autoAssessPinnedGoals(opts: { extended?: boolean } = {}): Promise<GoalsAssessment> {
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
@@ -165,11 +165,10 @@ Return ONLY a valid JSON array — no other text:
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 16000,
-    thinking: {
-      type: "enabled",
-      budget_tokens: 10000,
-    },
+    max_tokens: opts.extended ? 16000 : 2000,
+    ...(opts.extended
+      ? { thinking: { type: "enabled", budget_tokens: 10000 } }
+      : {}),
     messages: [{ role: "user", content: prompt }],
   });
 
