@@ -26,12 +26,18 @@ export async function POST() {
     .filter((t) => !t.done)
     .map((t) => `[${t.priority}] ${t.text}`);
 
-  const graph = await buildGraph(userId, { briefingItems, openTodos });
-
-  return NextResponse.json({
-    ok: true,
-    node_count: graph.nodes.length,
-    edge_count: graph.edges.length,
-    built_at: graph.built_at,
-  });
+  try {
+    const graph = await buildGraph(userId, { briefingItems, openTodos });
+    return NextResponse.json({
+      ok: true,
+      node_count: graph.nodes.length,
+      edge_count: graph.edges.length,
+      built_at: graph.built_at,
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Build failed" },
+      { status: 500 }
+    );
+  }
 }

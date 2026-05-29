@@ -102,15 +102,25 @@ export async function buildGraph(
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
-  // Load all KB docs
+  // Load all KB docs — use allSettled so a single KV failure doesn't abort the whole build
   const index = await getKBIndex();
-  const docs = await Promise.all(
+  const settled = await Promise.allSettled(
     index.map(async (entry) => {
       const doc = await getKBDoc(entry.slug);
       return doc ? `## ${doc.title} (${entry.slug})\n${doc.content}` : null;
     })
   );
-  const kbContext = docs.filter(Boolean).join("\n\n---\n\n");
+  const rawDocs = settled
+    .filter((r): r is PromiseFulfilledResult<string | null> => r.status === "fulfilled")
+    .map((r) => r.value)
+    .filter((v): v is string => v !== null);
+
+  // Cap total KB context at 60k chars to keep the prompt manageable
+  const MAX_KB_CHARS = 60_000;
+  let kbContext = rawDocs.join("\n\n---\n\n");
+  if (kbContext.length > MAX_KB_CHARS) {
+    kbContext = kbContext.slice(0, MAX_KB_CHARS) + "\n\n[...truncated for length]";
+  }
 
   const activityContext = [
     opts.briefingItems?.length
@@ -125,7 +135,7 @@ export async function buildGraph(
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 4000,
+    max_tokens: 8000,
     messages: [
       {
         role: "user",
@@ -175,20 +185,36 @@ Be thorough — include all named people from contacts, all named projects, all 
     ],
   });
 
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON in graph builder response");
+  const textBlock = response.content.find((b) => b.type === "text");
+  const text = textBlock?.type === "text" ? textBlock.text : "";
 
-  const extracted = JSON.parse(match[0]) as {
-    nodes: Omit<GraphNode, "last_seen">[];
-    edges: Omit<GraphEdge, "last_active">[];
-  };
+  // Find the outermost JSON object — try full match first, then truncation recovery
+  let extracted: { nodes: Omit<GraphNode, "last_seen">[]; edges: Omit<GraphEdge, "last_active">[] };
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON object found in graph builder response");
+  try {
+    extracted = JSON.parse(match[0]);
+  } catch {
+    // Response was likely cut off — try to salvage by closing the JSON manually
+    const partial = match[0];
+    // Find how many nodes we got and return them without edges
+    const nodesMatch = partial.match(/"nodes"\s*:\s*(\[[\s\S]*?\])/);
+    if (nodesMatch) {
+      try {
+        extracted = { nodes: JSON.parse(nodesMatch[1]), edges: [] };
+      } catch {
+        throw new Error("Graph builder response could not be parsed. Try again.");
+      }
+    } else {
+      throw new Error("Graph builder response malformed. Try again.");
+    }
+  }
 
   const now = new Date().toISOString();
 
   const graph: GraphData = {
-    nodes: extracted.nodes.map((n) => ({ ...n, last_seen: now })),
-    edges: extracted.edges.map((e) => ({ ...e, last_active: now })),
+    nodes: (extracted.nodes ?? []).map((n: Omit<GraphNode, "last_seen">) => ({ ...n, last_seen: now })),
+    edges: (extracted.edges ?? []).map((e: Omit<GraphEdge, "last_active">) => ({ ...e, last_active: now })),
     built_at: now,
   };
 
