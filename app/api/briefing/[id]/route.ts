@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
-import type { StoredBriefing } from "@/app/api/cron/sync/route";
-
-const BRIEFING_KEY = "briefing:latest";
+import { BRIEFING_KEY } from "@/lib/sync";
+import type { StoredBriefing } from "@/lib/sync";
 
 export async function PATCH(
   req: NextRequest,
@@ -13,7 +12,6 @@ export async function PATCH(
   if (!briefing) {
     return NextResponse.json({ error: "No briefing" }, { status: 404 });
   }
-
   const updated: StoredBriefing = {
     ...briefing,
     items: briefing.items.map((item) =>
