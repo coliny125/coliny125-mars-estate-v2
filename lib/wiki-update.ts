@@ -42,27 +42,28 @@ export async function runWeeklyWikiUpdate(): Promise<WeeklyUpdateResult> {
     return { ok: false, emails_scanned: 0, new_nodes: 0, new_edges: 0, updated_entries: 0 };
   }
 
-  // Pool last week's emails across every connected user.
+  // Pool last week's emails across every connected user. Cap aggressively so
+  // the Gmail fetch + single LLM call stay within the 60s function limit.
   const users = await getConnectedUsers();
   const threadLists = await Promise.all(
-    users.map((u) => fetchRecentThreads(u, 25, { newerThanDays: 7 }).catch(() => []))
+    users.map((u) => fetchRecentThreads(u, 10, { newerThanDays: 7 }).catch(() => []))
   );
-  const threads = threadLists.flat();
+  const threads = threadLists.flat().slice(0, 10);
   if (threads.length === 0) {
     return { ok: true, emails_scanned: 0, new_nodes: 0, new_edges: 0, updated_entries: 0 };
   }
 
   const emailContext = threads
-    .map((t, i) => `[${i + 1}] ${t.subject} — ${t.from}\n${t.body}`)
+    .map((t, i) => `[${i + 1}] ${t.subject} — ${t.from}\n${t.body.slice(0, 1200)}`)
     .join("\n\n---\n\n")
-    .slice(0, 30000);
+    .slice(0, 14000);
 
   const existingList = graph.nodes.map((n) => `${n.id} (${n.label})`).join(", ");
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
   const resp = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 6000,
+    max_tokens: 3000,
     messages: [
       {
         role: "user",
