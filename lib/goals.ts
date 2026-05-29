@@ -92,20 +92,48 @@ export async function autoAssessPinnedGoals(): Promise<GoalsAssessment> {
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
-  const [pinnedGoals, briefingRaw, ...kbDocs] = await Promise.all([
-    getPinnedGoals(),
-    kv.get<string>("briefing:latest"),
-    ...KB_SLUGS_FOR_GOALS.map((s) => getKBDoc(s)),
-  ]);
+  // Load everything in parallel
+  const [pinnedGoals, briefingRaw, todosRaw, researchRaw, ...kbDocs] =
+    await Promise.all([
+      getPinnedGoals(),
+      kv.get<string>("briefing:latest"),
+      kv.get<string>("todos"),
+      kv.get<string>("research:latest"),
+      ...KB_SLUGS_FOR_GOALS.map((s) => getKBDoc(s)),
+    ]);
 
-  // Recent briefing items for activity context
+  // Briefing items
   const recentActivity: string[] = [];
   if (briefingRaw) {
     try {
       const b = typeof briefingRaw === "string" ? JSON.parse(briefingRaw) : briefingRaw;
       if (Array.isArray(b?.items)) {
-        for (const item of b.items.slice(0, 8)) {
-          recentActivity.push(`[${item.kind}] ${item.body}`);
+        for (const item of b.items) {
+          recentActivity.push(`[${item.kind.toUpperCase()}] ${item.body}`);
+        }
+      }
+    } catch {}
+  }
+
+  // Open todos grouped by priority
+  const openTodos: string[] = [];
+  if (todosRaw) {
+    try {
+      const raw = typeof todosRaw === "string" ? JSON.parse(todosRaw) : todosRaw;
+      if (Array.isArray(raw)) {
+        for (const t of raw) if (!t.done) openTodos.push(`[${t.priority}] ${t.text}`);
+      }
+    } catch {}
+  }
+
+  // Research findings
+  const researchFindings: string[] = [];
+  if (researchRaw) {
+    try {
+      const r = typeof researchRaw === "string" ? JSON.parse(researchRaw) : researchRaw;
+      if (Array.isArray(r?.items)) {
+        for (const item of r.items.slice(0, 6)) {
+          researchFindings.push(`${item.topic}: ${item.summary}`);
         }
       }
     } catch {}
@@ -113,54 +141,68 @@ export async function autoAssessPinnedGoals(): Promise<GoalsAssessment> {
 
   const kbContext = kbDocs
     .filter(Boolean)
-    .map((d) => `## ${d!.title}\n${d!.content}`)
+    .map((d) => `### ${d!.title}\n${d!.content}`)
     .join("\n\n---\n\n");
 
   const goalsBlock = pinnedGoals
-    .map((g) => `- ${g.title} (horizon: ${g.horizon})`)
-    .join("\n");
+    .map((g, i) => `Goal ${i + 1} (id: ${g.id}): ${g.title}\nHorizon: ${g.horizon}`)
+    .join("\n\n");
 
-  const activityBlock = recentActivity.length
-    ? recentActivity.join("\n")
-    : "No recent briefing available.";
+  const prompt = `You are a strategic advisor to Mars Estate, a boutique Napa Valley winery on Howell Mountain. Your task is to rigorously assess the estate's real-world progress toward its three most important long-term goals.
+
+## The three goals
+${goalsBlock}
+
+## Recent inbox briefing (what happened this week)
+${recentActivity.length ? recentActivity.join("\n") : "No recent briefing available."}
+
+## Open action items
+${openTodos.length ? openTodos.join("\n") : "None."}
+
+## Industry research (current market context)
+${researchFindings.length ? researchFindings.join("\n") : "None."}
+
+## Strategic knowledge base
+${kbContext}
+
+## Your analytical framework
+Before writing your output, reason carefully through each goal using this rubric:
+
+**For each goal, ask:**
+1. What specific actions, projects, or decisions from the past week directly advance this goal? Only count things with real strategic weight — not routine admin.
+2. What is actively blocking, delaying, or contradicting this goal? Be honest about gaps, overdue items, or structural risks.
+3. Is the current pace consistent with the stated horizon? If not, say so.
+4. Are there any cross-goal tensions — where progress on one goal creates friction with another?
+
+**Quality criteria:**
+- Every bullet must reference a specific person, project, deadline, or event from the context above.
+- Avoid vague language ("working toward", "making progress"). Instead: "Ron Lutsko's $45K landscape plan is on track but no architecture firm has been selected, delaying hospitality center timeline."
+- If something is genuinely unclear or data is missing, say so — do not fabricate.
+- Toward bullets: 2-3, highest-signal only.
+- Away bullets: 1-2, most critical risks or gaps only.
+
+Return ONLY a valid JSON array — no other text:
+[
+  {
+    "goal_id": "<exact id from goal list above>",
+    "goal_title": "<exact goal title>",
+    "toward": ["<specific bullet>", "<specific bullet>"],
+    "away": ["<specific bullet>"]
+  }
+]`;
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 1024,
-    messages: [
-      {
-        role: "user",
-        content: `You are assessing Mars Estate's progress toward its three most important long-term goals.
-
-## Long-term goals
-${goalsBlock}
-
-## Recent activity (from inbox briefing)
-${activityBlock}
-
-## Strategic context (from knowledge base)
-${kbContext}
-
-For each goal, identify:
-- 2-3 recent activities or projects actively moving TOWARD that goal
-- 1-2 things that are a risk, gap, or moving AWAY from that goal
-
-Be specific — reference actual projects, people, or items from the context above. Keep each bullet to one concise sentence.
-
-Return ONLY a JSON array:
-[
-  {
-    "goal_id": "<pinned-1 | pinned-2 | pinned-3>",
-    "goal_title": "<exact goal title>",
-    "toward": ["<bullet>", "<bullet>"],
-    "away": ["<bullet>"]
-  }
-]`,
-      },
-    ],
+    max_tokens: 16000,
+    thinking: {
+      type: "enabled",
+      budget_tokens: 10000,
+    },
+    messages: [{ role: "user", content: prompt }],
   });
 
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
+  const textBlock = response.content.find((b) => b.type === "text");
+  const text = textBlock?.type === "text" ? textBlock.text : "";
   const match = text.match(/\[[\s\S]*\]/);
   if (!match) throw new Error("No JSON in goals assessment response");
 

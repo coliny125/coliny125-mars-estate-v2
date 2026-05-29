@@ -35,8 +35,8 @@ export async function runSync(): Promise<StoredBriefing> {
     threadCount = threads.length;
     emailContext = threads
       .map(
-        (t) =>
-          `Subject: ${t.subject}\nFrom: ${t.from}\nDate: ${t.date}\nSnippet: ${t.snippet}`
+        (t, i) =>
+          `[Thread ${i + 1}]\nSubject: ${t.subject}\nFrom: ${t.from}\nDate: ${t.date}\n\n${t.body}`
       )
       .join("\n\n---\n\n");
   }
@@ -48,45 +48,67 @@ export async function runSync(): Promise<StoredBriefing> {
     .join("\n");
 
   const prompt = connected
-    ? `You are an operations assistant for Mars Estate, a Napa Valley winery on Howell Mountain.
+    ? `You are the chief of staff for Mars Estate, a boutique Napa Valley winery on Howell Mountain. Your job is to produce a rigorous, actionable daily briefing for the owner (Colin Yuan) from his inbox.
 
-Below are the ${threadCount} most recent inbox emails. Synthesize them into 4–7 actionable briefing items for the winery owner.
+## Mars Estate context
+- 21.8-acre estate, Howell Mountain AVA, ~670 cases/year
+- Key relationships: Heidi Barrett (winemaker), Steve Matthiasson (viticulturist), Offset Partners (brand/web), Canopy Wine Selections (NY distribution), Hare Construction, Walker Warner / Butler Armsden (architecture)
+- Active projects: website launch, membership program (Founding Circle), DTC e-commerce (Offset Commerce), hospitality center planning, 2024 Chardonnay bottling (Jun 22)
 
-EMAILS:
+## Your analytical framework
+Before writing any output, work through these steps in your thinking:
+
+1. READ EVERY THREAD carefully — do not skim. The body content matters more than subject lines.
+2. CONNECT related threads — if two emails touch the same project or person, that is one briefing item, not two. Explicitly note the connection.
+3. CLASSIFY by urgency and type:
+   - RISK: something that could go wrong, cause financial loss, damage a relationship, or miss a deadline. Be specific about the consequence.
+   - DECISION: something where Colin must choose between options or approve something to unblock progress.
+   - OPPORTUNITY: something that could be acted on for meaningful gain if addressed soon.
+   - UPDATE: progress worth knowing that requires no immediate action.
+4. IGNORE: newsletters, automated notifications, payment confirmations (unless overdue), and calendar invites (unless they require a decision).
+5. CROSS-REFERENCE with open todos — do not duplicate items already on the todo list unless there is new urgency or information.
+6. PRIORITIZE: if more than 7 items surface, keep the 6-7 highest-stakes ones. Quality over quantity.
+
+## Input
+
+### Inbox (${threadCount} threads)
 ${emailContext}
 
-OPEN TODOS (for context, don't duplicate):
-${openTodos}
+### Open todos (for context — do not duplicate)
+${openTodos || "None"}
 
-Return a JSON object:
+## Output format
+Return ONLY a valid JSON object:
 {
-  "summary": "One sentence summary of today's communications",
+  "summary": "<One sharp sentence capturing the dominant theme across today's inbox>",
   "items": [
     {
       "id": "<uuid>",
-      "kind": "decision|risk|opportunity|update",
-      "body": "<specific, actionable 1-2 sentence insight>",
+      "kind": "risk|decision|opportunity|update",
+      "body": "<Specific, actionable 1-3 sentences. Name the person, the deadline, the consequence, or the dollar amount where known. No vague language.>",
       "source_kind": "email",
-      "source_refs": [{"label": "<sender or subject>"}]
+      "source_refs": [{"label": "<sender name or email subject — enough to identify the thread>"}]
     }
   ]
-}
-
-Focus on items needing attention. Skip newsletters, payment receipts, and calendar notifications unless they require action.`
+}`
     : `You are an operations assistant for Mars Estate, a Napa Valley winery on Howell Mountain.
 
-Gmail is not connected. Generate 4–5 placeholder briefing items based on typical Howell Mountain winery operations in late May.
+Gmail is not connected. Generate 4–5 placeholder briefing items based on typical late-May winery operations.
 
 Return JSON: { "summary": "...", "items": [...] }`;
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 1500,
+    max_tokens: 16000,
+    thinking: {
+      type: "enabled",
+      budget_tokens: 10000,
+    },
     messages: [{ role: "user", content: prompt }],
   });
 
-  const text =
-    response.content[0].type === "text" ? response.content[0].text : "";
+  const textBlock = response.content.find((b) => b.type === "text");
+  const text = textBlock?.type === "text" ? textBlock.text : "";
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON in Claude response");
 
