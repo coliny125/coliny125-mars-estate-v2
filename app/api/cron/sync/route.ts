@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
-import { runSync, BRIEFING_KEY } from "@/lib/sync";
+import { runSync, briefingKey } from "@/lib/sync";
 import { autoRunResearch, isResearchStale } from "@/lib/research";
 import { autoAssessPinnedGoals, areGoalsStale } from "@/lib/goals";
+import { getConnectedUsers } from "@/lib/gmail";
 import type { StoredBriefing } from "@/lib/sync";
 
 export const maxDuration = 60;
@@ -16,23 +17,37 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const [researchStale, goalsStale] = await Promise.all([
+    const [connectedUsers, researchStale] = await Promise.all([
+      getConnectedUsers(),
       isResearchStale(20),
-      areGoalsStale(20),
     ]);
 
-    // Briefing always runs; research + goals run once per day when stale
-    const [briefing] = await Promise.all([
-      runSync({ extended: true }),
-      researchStale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
-      goalsStale ? autoAssessPinnedGoals({ extended: true }).catch(() => null) : Promise.resolve(null),
-    ]);
+    // Sync each connected user in parallel
+    const userResults = await Promise.allSettled(
+      connectedUsers.map(async (userId) => {
+        const goalsStale = await areGoalsStale(userId, 20);
+        const [briefing] = await Promise.all([
+          runSync(userId, { extended: true }),
+          goalsStale
+            ? autoAssessPinnedGoals(userId, { extended: true }).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        return { userId, briefingId: briefing.id };
+      })
+    );
+
+    // Shared research refresh
+    if (researchStale) {
+      await autoRunResearch().catch(() => null);
+    }
 
     return NextResponse.json({
       ok: true,
-      briefing,
+      users_synced: connectedUsers.length,
       research_refreshed: researchStale,
-      goals_refreshed: goalsStale,
+      results: userResults.map((r) =>
+        r.status === "fulfilled" ? r.value : { error: r.reason?.message }
+      ),
     });
   } catch (e) {
     return NextResponse.json(
@@ -43,6 +58,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const briefing = await kv.get<StoredBriefing>(BRIEFING_KEY);
-  return NextResponse.json({ briefing: briefing ?? null });
+  // Return the current user's briefing isn't applicable here (no auth context in cron GET)
+  // Return a simple health check instead
+  return NextResponse.json({ ok: true });
 }

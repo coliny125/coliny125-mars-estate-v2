@@ -6,7 +6,7 @@ export interface PinnedGoal {
   horizon: string;
 }
 
-export const PINNED_GOALS_KEY = "goals:pinned";
+export function pinnedGoalsKey(userId: string) { return `goals:pinned:${userId}`; }
 
 export const DEFAULT_PINNED_GOALS: PinnedGoal[] = [
   {
@@ -26,8 +26,8 @@ export const DEFAULT_PINNED_GOALS: PinnedGoal[] = [
   },
 ];
 
-export async function getPinnedGoals(): Promise<PinnedGoal[]> {
-  const raw = await kv.get<string>(PINNED_GOALS_KEY);
+export async function getPinnedGoals(userId: string): Promise<PinnedGoal[]> {
+  const raw = await kv.get<string>(pinnedGoalsKey(userId));
   if (!raw) return DEFAULT_PINNED_GOALS;
   return typeof raw === "string" ? JSON.parse(raw) : (raw as PinnedGoal[]);
 }

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { threadStore, todoStore } from "@/lib/storage";
 import { getKBIndex, getKBDoc } from "@/lib/kb";
+import { getUserId } from "@/lib/auth-util";
 import type { Priority } from "@/lib/storage";
 import type { KBIndexEntry } from "@/lib/kb";
 
@@ -69,6 +70,10 @@ const BASE_TOOLS: Anthropic.Tool[] = [
 ];
 
 export async function POST(req: NextRequest) {
+  const authResult = getUserId();
+  if (authResult.error) return authResult.error;
+  const userId = authResult.userId;
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return new Response(JSON.stringify({ error: "Missing ANTHROPIC_API_KEY" }), {
@@ -85,12 +90,12 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  let thread = existingThreadId ? await threadStore.get(existingThreadId) : null;
-  if (!thread) thread = await threadStore.create();
+  let thread = existingThreadId ? await threadStore.get(userId, existingThreadId) : null;
+  if (!thread) thread = await threadStore.create(userId);
 
-  await threadStore.addMessage(thread.id, "user", message);
+  await threadStore.addMessage(userId, thread.id, "user", message);
 
-  const fullThread = await threadStore.get(thread.id);
+  const fullThread = await threadStore.get(userId, thread.id);
   const history = (fullThread?.messages ?? []).slice(0, -1).map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
@@ -151,7 +156,7 @@ export async function POST(req: NextRequest) {
 
             if (block.name === "add_todo") {
               const { text, priority = "M" } = input;
-              await todoStore.add(text, priority as Priority);
+              await todoStore.add(userId, text, priority as Priority);
               const msg = `Added to-do: "${text}"`;
               send({ content: `\n✓ ${msg}\n` });
               fullContent += `\n✓ ${msg}\n`;
@@ -171,7 +176,7 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        await threadStore.addMessage(threadId, "assistant", fullContent);
+        await threadStore.addMessage(userId, threadId, "assistant", fullContent);
         send({ done: true, threadId });
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } catch (e) {

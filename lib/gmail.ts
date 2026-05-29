@@ -1,7 +1,7 @@
 import { kv } from "@vercel/kv";
 
-const TOKEN_KEY = "gmail:tokens";
 const BODY_MAX_CHARS = 2500;
+const CONNECTED_USERS_KEY = "gmail:connected-users";
 
 interface GmailTokens {
   access_token: string;
@@ -19,25 +19,37 @@ export interface GmailThread {
   labelIds: string[];
 }
 
-export async function isGmailConnected(): Promise<boolean> {
-  const tokens = await kv.get<GmailTokens>(TOKEN_KEY);
+function tokenKey(userId: string) {
+  return `gmail:tokens:${userId}`;
+}
+
+export async function isGmailConnected(userId: string): Promise<boolean> {
+  const tokens = await kv.get<GmailTokens>(tokenKey(userId));
   return !!tokens?.refresh_token;
 }
 
 export async function storeTokens(
+  userId: string,
   access_token: string,
   refresh_token: string,
   expires_in: number
 ) {
-  await kv.set<GmailTokens>(TOKEN_KEY, {
-    access_token,
-    refresh_token,
-    expiry: Date.now() + expires_in * 1000,
-  });
+  await Promise.all([
+    kv.set<GmailTokens>(tokenKey(userId), {
+      access_token,
+      refresh_token,
+      expiry: Date.now() + expires_in * 1000,
+    }),
+    kv.sadd(CONNECTED_USERS_KEY, userId),
+  ]);
 }
 
-async function getValidAccessToken(): Promise<string | null> {
-  const tokens = await kv.get<GmailTokens>(TOKEN_KEY);
+export async function getConnectedUsers(): Promise<string[]> {
+  return (await kv.smembers(CONNECTED_USERS_KEY)) as string[];
+}
+
+async function getValidAccessToken(userId: string): Promise<string | null> {
+  const tokens = await kv.get<GmailTokens>(tokenKey(userId));
   if (!tokens?.refresh_token) return null;
 
   if (Date.now() < tokens.expiry - 120_000) return tokens.access_token;
@@ -56,7 +68,7 @@ async function getValidAccessToken(): Promise<string | null> {
   const data = await r.json();
   if (!data.access_token) return null;
 
-  await kv.set<GmailTokens>(TOKEN_KEY, {
+  await kv.set<GmailTokens>(tokenKey(userId), {
     ...tokens,
     access_token: data.access_token,
     expiry: Date.now() + (data.expires_in ?? 3600) * 1000,
@@ -65,24 +77,22 @@ async function getValidAccessToken(): Promise<string | null> {
   return data.access_token;
 }
 
-// Recursively extract plain-text content from a Gmail message payload
 function extractPlainText(payload: Record<string, unknown>): string {
-  const mimeType = payload.mimeType as string ?? "";
+  const mimeType = (payload.mimeType as string) ?? "";
 
   if (mimeType === "text/plain") {
     const data = (payload.body as Record<string, string>)?.data ?? "";
     if (!data) return "";
-    // Gmail uses base64url encoding
-    const decoded = Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
-    return decoded;
+    return Buffer.from(
+      data.replace(/-/g, "+").replace(/_/g, "/"),
+      "base64"
+    ).toString("utf-8");
   }
 
-  // For multipart, prefer text/plain over text/html
   const parts = (payload.parts as Record<string, unknown>[]) ?? [];
   const plainPart = parts.find((p) => (p.mimeType as string) === "text/plain");
   if (plainPart) return extractPlainText(plainPart);
 
-  // Recurse into any part
   for (const part of parts) {
     const text = extractPlainText(part);
     if (text) return text;
@@ -102,29 +112,31 @@ async function fetchThreadFull(
   if (!res.ok) return null;
   const thread = await res.json();
 
-  // Use the most recent message for headers; concatenate all message bodies
   const messages: Record<string, unknown>[] = thread.messages ?? [];
   if (!messages.length) return null;
 
   const lastMsg = messages[messages.length - 1] as Record<string, unknown>;
   const headers: { name: string; value: string }[] =
-    (lastMsg.payload as Record<string, unknown>)?.headers as { name: string; value: string }[] ?? [];
+    ((lastMsg.payload as Record<string, unknown>)?.headers as {
+      name: string;
+      value: string;
+    }[]) ?? [];
 
   const get = (name: string) =>
-    headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+    headers.find((h) => h.name.toLowerCase() === name.toLowerCase())
+      ?.value ?? "";
 
-  // Combine bodies from all messages in the thread (newest first, truncated)
   let combinedBody = messages
     .slice()
     .reverse()
     .map((m) => {
-      const payload = (m as Record<string, unknown>).payload as Record<string, unknown>;
+      const payload = (m as Record<string, unknown>)
+        .payload as Record<string, unknown>;
       return payload ? extractPlainText(payload) : "";
     })
     .filter(Boolean)
     .join("\n\n---\n\n");
 
-  // Strip quoted reply chains (lines starting with ">") to reduce noise
   combinedBody = combinedBody
     .split("\n")
     .filter((line) => !line.startsWith(">"))
@@ -142,15 +154,16 @@ async function fetchThreadFull(
     subject: get("Subject"),
     from: get("From"),
     date: get("Date"),
-    body: combinedBody || get("Subject"), // fallback to subject if body is empty
+    body: combinedBody || get("Subject"),
     labelIds: (lastMsg.labelIds as string[]) ?? [],
   };
 }
 
 export async function fetchRecentThreads(
+  userId: string,
   maxResults = 40
 ): Promise<GmailThread[]> {
-  const token = await getValidAccessToken();
+  const token = await getValidAccessToken(userId);
   if (!token) return [];
 
   const listRes = await fetch(
@@ -162,7 +175,6 @@ export async function fetchRecentThreads(
     .slice(0, 20)
     .map((t: { id: string }) => t.id);
 
-  // Fetch all threads in parallel
   const settled = await Promise.allSettled(
     threadIds.map((id) => fetchThreadFull(id, token))
   );

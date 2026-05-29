@@ -4,7 +4,7 @@ import { getKBDoc } from "@/lib/kb";
 import { getPinnedGoals } from "@/lib/pinned-goals";
 import { todoStore } from "@/lib/storage";
 export type { PinnedGoal } from "@/lib/pinned-goals";
-export { PINNED_GOALS_KEY, DEFAULT_PINNED_GOALS } from "@/lib/pinned-goals";
+export { pinnedGoalsKey, DEFAULT_PINNED_GOALS } from "@/lib/pinned-goals";
 
 // ── Legacy goal types (kept for existing API routes) ─────────────────────────
 export type GoalStatus = "on_track" | "at_risk" | "completed" | "blocked";
@@ -44,11 +44,11 @@ export interface GoalsAssessment {
   generated_at: string;
 }
 
-export const GOALS_ASSESSMENT_KEY = "goals:assessment";
-const GOALS_ASSESSED_KEY = "goals:last_assessed";
+export function goalsAssessmentKey(userId: string) { return `goals:assessment:${userId}`; }
+function goalsAssessedKey(userId: string) { return `goals:last_assessed:${userId}`; }
 
-export async function areGoalsStale(maxAgeHours = 20): Promise<boolean> {
-  const ts = await kv.get<string>(GOALS_ASSESSED_KEY);
+export async function areGoalsStale(userId: string, maxAgeHours = 20): Promise<boolean> {
+  const ts = await kv.get<string>(goalsAssessedKey(userId));
   if (!ts) return true;
   const ageHours = (Date.now() - new Date(ts as string).getTime()) / (1000 * 60 * 60);
   return ageHours > maxAgeHours;
@@ -61,16 +61,19 @@ const KB_SLUGS_FOR_GOALS = [
   "brand-marketing/lifestyle-brand-strategy",
 ];
 
-export async function autoAssessPinnedGoals(opts: { extended?: boolean } = {}): Promise<GoalsAssessment> {
+export async function autoAssessPinnedGoals(
+  userId: string,
+  opts: { extended?: boolean } = {}
+): Promise<GoalsAssessment> {
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
   // Load everything in parallel — todos use hgetall via todoStore, not kv.get
   const [pinnedGoals, briefingRaw, allTodos, researchRaw, ...kbDocs] =
     await Promise.all([
-      getPinnedGoals(),
-      kv.get<string>("briefing:latest"),
-      todoStore.list(),
+      getPinnedGoals(userId),
+      kv.get<string>(`briefing:${userId}`),
+      todoStore.list(userId),
       kv.get<string>("research:latest"),
       ...KB_SLUGS_FOR_GOALS.map((s) => getKBDoc(s)),
     ]);
@@ -180,8 +183,8 @@ Return ONLY a valid JSON array — no other text:
 
   const now = new Date().toISOString();
   await Promise.all([
-    kv.set(GOALS_ASSESSMENT_KEY, JSON.stringify(result)),
-    kv.set(GOALS_ASSESSED_KEY, now),
+    kv.set(goalsAssessmentKey(userId), JSON.stringify(result)),
+    kv.set(goalsAssessedKey(userId), now),
   ]);
 
   return result;

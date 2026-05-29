@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
+import { getUserId } from "@/lib/auth-util";
 
 export async function GET() {
+  const auth = getUserId();
+  if (auth.error) return auth.error;
+
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI;
 
@@ -17,7 +21,8 @@ export async function GET() {
     response_type: "code",
     scope: "https://www.googleapis.com/auth/gmail.readonly",
     access_type: "offline",
-    prompt: "consent", // force refresh_token every time
+    prompt: "consent",
+    state: auth.userId, // carry userId through the OAuth round-trip
   });
 
   return NextResponse.redirect(

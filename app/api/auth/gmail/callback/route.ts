@@ -4,10 +4,17 @@ import { storeTokens } from "@/lib/gmail";
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const error = req.nextUrl.searchParams.get("error");
+  const userId = req.nextUrl.searchParams.get("state");
 
   if (error || !code) {
     return NextResponse.redirect(
-      new URL(`/?gmail_error=${error ?? "no_code"}`, req.url)
+      new URL(`/settings?gmail_error=${error ?? "no_code"}`, req.url)
+    );
+  }
+
+  if (!userId) {
+    return NextResponse.redirect(
+      new URL("/settings?gmail_error=missing_state", req.url)
     );
   }
 
@@ -27,11 +34,11 @@ export async function GET(req: NextRequest) {
 
   if (!data.refresh_token) {
     return NextResponse.redirect(
-      new URL("/?gmail_error=no_refresh_token", req.url)
+      new URL("/settings?gmail_error=no_refresh_token", req.url)
     );
   }
 
-  await storeTokens(data.access_token, data.refresh_token, data.expires_in ?? 3600);
+  await storeTokens(userId, data.access_token, data.refresh_token, data.expires_in ?? 3600);
 
-  return NextResponse.redirect(new URL("/?gmail_connected=1", req.url));
+  return NextResponse.redirect(new URL("/settings?gmail_connected=1", req.url));
 }

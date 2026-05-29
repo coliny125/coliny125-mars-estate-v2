@@ -2,6 +2,7 @@ import { kv } from "@vercel/kv";
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchRecentThreads, isGmailConnected } from "@/lib/gmail";
 import { todoStore } from "@/lib/storage";
+import { enrichKBFromSync } from "@/lib/kb-enrich";
 
 export interface BriefItem {
   id: string;
@@ -20,18 +21,23 @@ export interface StoredBriefing {
   items: BriefItem[];
 }
 
-export const BRIEFING_KEY = "briefing:latest";
+export function briefingKey(userId: string) {
+  return `briefing:${userId}`;
+}
 
-export async function runSync(opts: { extended?: boolean } = {}): Promise<StoredBriefing> {
+export async function runSync(
+  userId: string,
+  opts: { extended?: boolean; userEmail?: string } = {}
+): Promise<StoredBriefing> {
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
-  const connected = await isGmailConnected();
+  const connected = await isGmailConnected(userId);
   let emailContext = "";
   let threadCount = 0;
 
   if (connected) {
-    const threads = await fetchRecentThreads(40);
+    const threads = await fetchRecentThreads(userId, 40);
     threadCount = threads.length;
     emailContext = threads
       .map(
@@ -41,14 +47,14 @@ export async function runSync(opts: { extended?: boolean } = {}): Promise<Stored
       .join("\n\n---\n\n");
   }
 
-  const todos = await todoStore.list();
+  const todos = await todoStore.list(userId);
   const openTodos = todos
     .filter((t) => !t.done)
     .map((t) => `[${t.priority}] ${t.text}`)
     .join("\n");
 
   const prompt = connected
-    ? `You are the chief of staff for Mars Estate, a boutique Napa Valley winery on Howell Mountain. Your job is to produce a rigorous, actionable daily briefing for the owner (Colin Yuan) from his inbox.
+    ? `You are the chief of staff for Mars Estate, a boutique Napa Valley winery on Howell Mountain. Your job is to produce a rigorous, actionable daily briefing from this user's inbox.
 
 ## Mars Estate context
 - 21.8-acre estate, Howell Mountain AVA, ~670 cases/year
@@ -56,18 +62,12 @@ export async function runSync(opts: { extended?: boolean } = {}): Promise<Stored
 - Active projects: website launch, membership program (Founding Circle), DTC e-commerce (Offset Commerce), hospitality center planning, 2024 Chardonnay bottling (Jun 22)
 
 ## Your analytical framework
-Before writing any output, work through these steps in your thinking:
-
-1. READ EVERY THREAD carefully — do not skim. The body content matters more than subject lines.
-2. CONNECT related threads — if two emails touch the same project or person, that is one briefing item, not two. Explicitly note the connection.
-3. CLASSIFY by urgency and type:
-   - RISK: something that could go wrong, cause financial loss, damage a relationship, or miss a deadline. Be specific about the consequence.
-   - DECISION: something where Colin must choose between options or approve something to unblock progress.
-   - OPPORTUNITY: something that could be acted on for meaningful gain if addressed soon.
-   - UPDATE: progress worth knowing that requires no immediate action.
-4. IGNORE: newsletters, automated notifications, payment confirmations (unless overdue), and calendar invites (unless they require a decision).
-5. CROSS-REFERENCE with open todos — do not duplicate items already on the todo list unless there is new urgency or information.
-6. PRIORITIZE: if more than 7 items surface, keep the 6-7 highest-stakes ones. Quality over quantity.
+1. READ EVERY THREAD carefully — body content matters more than subject lines.
+2. CONNECT related threads — if two emails touch the same project or person, that is one briefing item.
+3. CLASSIFY by urgency: RISK (consequence if ignored), DECISION (choice needed to unblock), OPPORTUNITY (act soon for gain), UPDATE (no action needed).
+4. IGNORE newsletters, automated notifications, payment confirmations (unless overdue), calendar invites (unless they require a decision).
+5. CROSS-REFERENCE with open todos — do not duplicate unless there is new urgency.
+6. PRIORITIZE: keep the 6-7 highest-stakes items. Quality over quantity.
 
 ## Input
 
@@ -80,14 +80,14 @@ ${openTodos || "None"}
 ## Output format
 Return ONLY a valid JSON object:
 {
-  "summary": "<One sharp sentence capturing the dominant theme across today's inbox>",
+  "summary": "<One sharp sentence capturing the dominant theme>",
   "items": [
     {
       "id": "<uuid>",
       "kind": "risk|decision|opportunity|update",
-      "body": "<Specific, actionable 1-3 sentences. Name the person, the deadline, the consequence, or the dollar amount where known. No vague language.>",
+      "body": "<Specific, actionable 1-3 sentences. Name the person, deadline, consequence, or dollar amount. No vague language.>",
       "source_kind": "email",
-      "source_refs": [{"label": "<sender name or email subject — enough to identify the thread>"}]
+      "source_refs": [{"label": "<sender name or subject>"}]
     }
   ]
 }`
@@ -126,6 +126,12 @@ Return JSON: { "summary": "...", "items": [...] }`;
     })),
   };
 
-  await kv.set(BRIEFING_KEY, briefing);
+  await kv.set(briefingKey(userId), briefing);
+
+  // Enrich the shared KB from this user's inbox (fire-and-forget, don't block)
+  if (emailContext && opts.userEmail) {
+    enrichKBFromSync(userId, opts.userEmail, emailContext).catch(() => null);
+  }
+
   return briefing;
 }
