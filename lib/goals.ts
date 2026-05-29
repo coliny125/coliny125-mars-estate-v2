@@ -2,6 +2,7 @@ import { kv } from "@vercel/kv";
 import Anthropic from "@anthropic-ai/sdk";
 import { getKBDoc } from "@/lib/kb";
 import { getPinnedGoals } from "@/lib/pinned-goals";
+import { todoStore } from "@/lib/storage";
 export type { PinnedGoal } from "@/lib/pinned-goals";
 export { PINNED_GOALS_KEY, DEFAULT_PINNED_GOALS } from "@/lib/pinned-goals";
 
@@ -64,12 +65,12 @@ export async function autoAssessPinnedGoals(opts: { extended?: boolean } = {}): 
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
-  // Load everything in parallel
-  const [pinnedGoals, briefingRaw, todosRaw, researchRaw, ...kbDocs] =
+  // Load everything in parallel — todos use hgetall via todoStore, not kv.get
+  const [pinnedGoals, briefingRaw, allTodos, researchRaw, ...kbDocs] =
     await Promise.all([
       getPinnedGoals(),
       kv.get<string>("briefing:latest"),
-      kv.get<string>("todos"),
+      todoStore.list(),
       kv.get<string>("research:latest"),
       ...KB_SLUGS_FOR_GOALS.map((s) => getKBDoc(s)),
     ]);
@@ -87,16 +88,10 @@ export async function autoAssessPinnedGoals(opts: { extended?: boolean } = {}): 
     } catch {}
   }
 
-  // Open todos grouped by priority
-  const openTodos: string[] = [];
-  if (todosRaw) {
-    try {
-      const raw = typeof todosRaw === "string" ? JSON.parse(todosRaw) : todosRaw;
-      if (Array.isArray(raw)) {
-        for (const t of raw) if (!t.done) openTodos.push(`[${t.priority}] ${t.text}`);
-      }
-    } catch {}
-  }
+  // Open todos
+  const openTodos = allTodos
+    .filter((t) => !t.done)
+    .map((t) => `[${t.priority}] ${t.text}`);
 
   // Research findings
   const researchFindings: string[] = [];
