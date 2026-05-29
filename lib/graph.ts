@@ -135,26 +135,49 @@ export async function buildGraph(
   type RawNode = { id: string; type: NodeType; label: string; desc?: string; email?: string };
   type RawEdge = { s: string; t: string; r: RelationType; w?: number };
 
-  function parseJson<T>(text: string, key: "nodes" | "edges"): T[] {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return [];
-    try {
-      const parsed = JSON.parse(match[0]);
-      return (parsed[key] ?? []) as T[];
-    } catch {
-      // Salvage the array alone if the object is truncated
-      const arrMatch = match[0].match(new RegExp(`"${key}"\\s*:\\s*(\\[[\\s\\S]*\\])`));
-      if (arrMatch) {
-        // Trim to the last complete object in the array
-        const trimmed = arrMatch[1].replace(/,\s*\{[^}]*$/, "") + (arrMatch[1].trimEnd().endsWith("]") ? "" : "]");
-        try {
-          return JSON.parse(trimmed) as T[];
-        } catch {
-          return [];
+  // Robust extractor: scans for the named array, then collects every COMPLETE
+  // {...} object via brace-counting. Survives truncation (stops at the last
+  // whole object) and stray non-ASCII characters (sanitized first). This is the
+  // critical fix — the edges response routinely truncates at max_tokens, and a
+  // regex parser requiring a closing bracket would silently return [].
+  function extractObjects<T>(text: string, key: "nodes" | "edges"): T[] {
+    const clean = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+    const keyIdx = clean.indexOf(`"${key}"`);
+    if (keyIdx < 0) return [];
+    const bracket = clean.indexOf("[", keyIdx);
+    if (bracket < 0) return [];
+
+    const objs: T[] = [];
+    let depth = 0;
+    let cur = "";
+    let inObj = false;
+    for (let i = bracket + 1; i < clean.length; i++) {
+      const c = clean[i];
+      if (c === "{") {
+        if (depth === 0) {
+          inObj = true;
+          cur = "";
         }
+        depth++;
+        cur += c;
+      } else if (c === "}") {
+        depth--;
+        cur += c;
+        if (depth === 0 && inObj) {
+          try {
+            objs.push(JSON.parse(cur) as T);
+          } catch {
+            /* skip malformed object */
+          }
+          inObj = false;
+        }
+      } else if (inObj) {
+        cur += c;
+      } else if (c === "]" && depth === 0) {
+        break; // end of the target array
       }
-      return [];
     }
+    return objs;
   }
 
   // ── Call 1: extract nodes ───────────────────────────────────────────────────
@@ -185,15 +208,16 @@ Be thorough — all named people from contacts, all projects, all orgs, all majo
     nodesResp.content.find((b) => b.type === "text")?.type === "text"
       ? (nodesResp.content.find((b) => b.type === "text") as { text: string }).text
       : "";
-  const rawNodes = parseJson<RawNode>(nodesText, "nodes");
+  const rawNodes = extractObjects<RawNode>(nodesText, "nodes").filter(
+    (n) => n && n.id && n.label
+  );
   if (rawNodes.length === 0) {
     throw new Error("Graph builder returned no nodes — try Rebuild again.");
   }
 
   // ── Call 2: extract edges given the node list ────────────────────────────────
-  const nodeList = rawNodes
-    .map((n) => `${n.id} (${n.type}: ${n.label})`)
-    .join("\n");
+  // Pass bare ids (comma-separated) — verified to maximize exact-id reuse by the model.
+  const nodeList = rawNodes.map((n) => n.id).join(", ");
 
   const edgesResp = await client.messages.create({
     model: "claude-sonnet-4-6",
@@ -201,18 +225,18 @@ Be thorough — all named people from contacts, all projects, all orgs, all majo
     messages: [
       {
         role: "user",
-        content: `Given these Mars Estate entities, identify the relationships (edges) between them. Use the exact ids shown.
+        content: `These are the Mars Estate knowledge-graph entity ids. Identify the relationships between them. Edge "s" and "t" MUST be exact ids from this list — never invent new ids.
 
-## Entities
+## Entity ids
 ${nodeList}
 
 Relation types: works_at, involved_in, depends_on, related_to, owns, competes_with
 Edge weight "w" 1-5 (5 = core relationship).
 
 Return ONLY compact JSON:
-{"edges":[{"s":"source-id","t":"target-id","r":"works_at","w":3}]}
+{"edges":[{"s":"exact-id","t":"exact-id","r":"works_at","w":3}]}
 
-Be thorough — connect each person to their org, each person to projects they touch, related projects and topics, and dependencies between projects.`,
+Be thorough — connect each person to their org, each person to the projects they touch, related projects and topics, and dependencies between projects.`,
       },
     ],
   });
@@ -220,18 +244,52 @@ Be thorough — connect each person to their org, each person to projects they t
     edgesResp.content.find((b) => b.type === "text")?.type === "text"
       ? (edgesResp.content.find((b) => b.type === "text") as { text: string }).text
       : "";
-  const rawEdges = parseJson<RawEdge>(edgesText, "edges");
+  const rawEdges = extractObjects<RawEdge>(edgesText, "edges").filter(
+    (e) => e && e.s && e.t
+  );
 
   const now = new Date().toISOString();
 
-  // Degree (connection count) → "heat" metric
-  const degree: Record<string, number> = {};
+  // ── Entity resolution (methodology step 5) ──────────────────────────────────
+  // Resolve each edge endpoint to a real node id: exact match first, then a
+  // normalized match (strip non-alphanumerics) so "heidi_barrett" → "heidi-barrett".
+  const idSet = new Set(rawNodes.map((n) => n.id));
+  const normMap = new Map<string, string>();
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (const n of rawNodes) normMap.set(norm(n.id), n.id);
+
+  const resolve = (raw: string): string | null => {
+    if (idSet.has(raw)) return raw;
+    const byNorm = normMap.get(norm(raw));
+    return byNorm ?? null;
+  };
+
+  // Dedupe, drop self-loops and unresolvable endpoints
+  const seen = new Set<string>();
+  const resolvedEdges: GraphEdge[] = [];
   for (const e of rawEdges) {
-    degree[e.s] = (degree[e.s] ?? 0) + 1;
-    degree[e.t] = (degree[e.t] ?? 0) + 1;
+    const s = resolve(e.s);
+    const t = resolve(e.t);
+    if (!s || !t || s === t) continue;
+    const key = `${s}|${t}|${e.r}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    resolvedEdges.push({
+      id: `${s}--${e.r}--${t}`,
+      source: s,
+      target: t,
+      relation: e.r,
+      weight: e.w ?? 2,
+      last_active: now,
+    });
   }
 
-  const validNodeIds = new Set(rawNodes.map((n) => n.id));
+  // Degree (connection count) → "heat" metric and node sizing
+  const degree: Record<string, number> = {};
+  for (const e of resolvedEdges) {
+    degree[e.source] = (degree[e.source] ?? 0) + 1;
+    degree[e.target] = (degree[e.target] ?? 0) + 1;
+  }
 
   const graph: GraphData = {
     nodes: rawNodes.map((n) => ({
@@ -244,16 +302,7 @@ Be thorough — connect each person to their org, each person to projects they t
       sources: [],
       mention_count: degree[n.id] ?? 0,
     })),
-    edges: rawEdges
-      .filter((e) => validNodeIds.has(e.s) && validNodeIds.has(e.t))
-      .map((e) => ({
-        id: `${e.s}--${e.r}--${e.t}`,
-        source: e.s,
-        target: e.t,
-        relation: e.r,
-        weight: e.w ?? 2,
-        last_active: now,
-      })),
+    edges: resolvedEdges,
     built_at: now,
   };
 
