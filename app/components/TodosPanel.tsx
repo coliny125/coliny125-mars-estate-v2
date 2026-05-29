@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Priority, Todo } from "@/lib/storage";
+import ProgressBar from "./ProgressBar";
 
 const GROUPS: { priority: Priority; label: string; dot: string }[] = [
   { priority: "H", label: "High Priority — This Week", dot: "bg-oxblood-500" },
@@ -16,6 +17,8 @@ export default function TodosPanel() {
   const [newText, setNewText] = useState("");
   const [newPriority, setNewPriority] = useState<Priority>("M");
   const [submitting, setSubmitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   async function fetchTodos() {
     const r = await fetch("/api/todos");
@@ -63,9 +66,29 @@ export default function TodosPanel() {
     await fetch(`/api/todos/${id}`, { method: "DELETE" });
   }
 
+  async function generateTodos() {
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const r = await fetch("/api/todos/generate", { method: "POST" });
+      if (!r.ok) {
+        const d = await r.json();
+        throw new Error(d.error ?? `Error ${r.status}`);
+      }
+      const data = await r.json();
+      setTodos((prev) => [...(data.todos ?? []), ...prev]);
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   const visible = showDone ? todos : todos.filter((t) => !t.done);
 
-  const subLabel = loading
+  const subLabel = generateError
+    ? generateError
+    : loading
     ? "Loading…"
     : `${todos.filter((t) => !t.done).length} open`;
 
@@ -79,7 +102,15 @@ export default function TodosPanel() {
           </h2>
           <div className="text-xs text-parchment-500 mt-2">{subLabel}</div>
         </div>
-        <div className="shrink-0">
+        <div className="shrink-0 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={generateTodos}
+            disabled={generating}
+            className="text-[11px] tracking-eyebrow uppercase text-brass-400 hover:text-brass-400/80 disabled:opacity-40 transition-colors"
+          >
+            {generating ? "Generating…" : "Generate"}
+          </button>
           <button
             type="button"
             onClick={() => setShowDone((s) => !s)}
@@ -89,6 +120,7 @@ export default function TodosPanel() {
           </button>
         </div>
       </div>
+      <ProgressBar active={generating} durationMs={10000} />
       <div className="px-6 py-5 max-h-[32rem] overflow-y-auto panel-scroll">
         <form onSubmit={addTodo} className="flex items-stretch gap-2 mb-6">
           <select

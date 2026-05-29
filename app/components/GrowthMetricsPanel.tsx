@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { relativeTime } from "@/lib/date";
 import type { PinnedGoal } from "@/lib/pinned-goals";
 import type { GoalAssessment, GoalsAssessment } from "@/lib/goals";
+import ProgressBar from "./ProgressBar";
 
 export default function GrowthMetricsPanel() {
   const [goals, setGoals] = useState<PinnedGoal[]>([]);
@@ -110,6 +111,7 @@ export default function GrowthMetricsPanel() {
         </div>
       </div>
 
+      <ProgressBar active={assessing} durationMs={15000} />
       <div className="px-6 py-5 max-h-[32rem] overflow-y-auto panel-scroll">
         {editing ? (
           <div className="space-y-4">

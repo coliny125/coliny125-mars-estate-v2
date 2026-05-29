@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { relativeTime } from "@/lib/date";
+import ProgressBar from "./ProgressBar";
 
 interface ResearchItem {
   id: string;
@@ -125,6 +126,7 @@ export default function ResearchPanel() {
           </button>
         </div>
       </div>
+      <ProgressBar active={running} durationMs={20000} />
       <div className="px-6 py-5 max-h-[32rem] overflow-y-auto panel-scroll">
         {editingFocus && (
           <div className="mb-6 border hairline rounded-sm p-4 bg-ink-700/40">
