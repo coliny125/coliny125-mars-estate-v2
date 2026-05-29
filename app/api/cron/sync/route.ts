@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 import { runSync, BRIEFING_KEY } from "@/lib/sync";
+import { autoRunResearch, isResearchStale } from "@/lib/research";
 import type { StoredBriefing } from "@/lib/sync";
 
 export const maxDuration = 60;
@@ -14,8 +15,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const briefing = await runSync();
-    return NextResponse.json({ ok: true, briefing });
+    const stale = await isResearchStale(20);
+    const [briefing] = await Promise.all([
+      runSync(),
+      stale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
+    ]);
+    return NextResponse.json({ ok: true, briefing, research_refreshed: stale });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Sync failed" },

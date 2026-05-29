@@ -111,7 +111,7 @@ export default function CommunicationsPanel() {
         <div className="shrink-0 flex items-center gap-3">
           {gmailConnected === false && (
             <a
-              href="/api/auth/gmail"
+              href="/settings"
               className="text-[11px] tracking-eyebrow uppercase text-brass-400 hover:text-brass-400/80 transition-colors border border-brass-500/30 rounded-sm px-2 py-1"
             >
               Connect Gmail
@@ -151,7 +151,7 @@ export default function CommunicationsPanel() {
             <p>No briefing yet.</p>
             {gmailConnected === false ? (
               <p>
-                Connect Gmail above, then click{" "}
+                <a href="/settings" className="text-brass-400 hover:underline">Connect Gmail in Settings</a>, then click{" "}
                 <button
                   onClick={triggerSync}
                   className="text-brass-400 hover:underline"

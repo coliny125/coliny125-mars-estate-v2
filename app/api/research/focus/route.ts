@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { kv } from "@vercel/kv";
 
-// Focus list is stored in the research route's module-level state.
-// This is a stub that returns OK — in production, persist to a DB or env var.
+const FOCUS_KEY = "research:focus";
+
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  return NextResponse.json({ ok: true, topics: body.topics ?? [] });
+  const topics: string[] = (body.topics ?? []).filter(
+    (t: unknown) => typeof t === "string" && (t as string).trim()
+  );
+  await kv.set(FOCUS_KEY, JSON.stringify(topics));
+  return NextResponse.json({ ok: true, topics });
 }
