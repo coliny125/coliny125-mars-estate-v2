@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
-import { runSync, briefingKey } from "@/lib/sync";
+import { runSync } from "@/lib/sync";
 import { autoRunResearch, isResearchStale } from "@/lib/research";
 import { autoAssessPinnedGoals, areGoalsStale } from "@/lib/goals";
 import { getConnectedUsers } from "@/lib/gmail";
-import type { StoredBriefing } from "@/lib/sync";
 
 export const maxDuration = 60;
 
