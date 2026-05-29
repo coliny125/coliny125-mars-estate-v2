@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, Suspense } from "react";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -45,6 +46,30 @@ function relTime(dateStr: string | null | undefined): string {
   const h = Math.floor(n / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+function MdContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-parchment-100">{children}</strong>,
+        em: ({ children }) => <em className="italic text-parchment-300">{children}</em>,
+        ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="text-parchment-200">{children}</li>,
+        h1: ({ children }) => <h1 className="display-serif text-xl text-parchment-100 mb-2 mt-3 first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="display-serif text-lg text-parchment-100 mb-1.5 mt-3 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="font-semibold text-parchment-100 mb-1 mt-2 first:mt-0">{children}</h3>,
+        code: ({ children }) => <code className="bg-ink-800 text-brass-400 rounded px-1 py-0.5 text-xs font-mono">{children}</code>,
+        pre: ({ children }) => <pre className="bg-ink-800 rounded-sm p-3 overflow-x-auto mb-2 text-xs font-mono text-parchment-300">{children}</pre>,
+        blockquote: ({ children }) => <blockquote className="border-l-2 border-brass-500/40 pl-3 italic text-parchment-400 mb-2">{children}</blockquote>,
+        hr: () => <hr className="border-parchment-500/20 my-3" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function ChatPageInner() {
@@ -336,14 +361,18 @@ function ChatPageInner() {
                           : "bg-ink-700/60 text-parchment-200 border hairline"
                       }`}
                     >
-                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                      {msg.role === "user" ? (
+                        <div className="whitespace-pre-wrap">{msg.content}</div>
+                      ) : (
+                        <MdContent content={msg.content} />
+                      )}
                     </div>
                   </div>
                 ))}
                 {streaming && streamingContent && (
                   <div className="flex justify-start">
                     <div className="max-w-[85%] rounded-sm px-4 py-3 text-sm leading-relaxed bg-ink-700/60 text-parchment-200 border hairline">
-                      <div className="whitespace-pre-wrap">{streamingContent}</div>
+                      <MdContent content={streamingContent} />
                     </div>
                   </div>
                 )}

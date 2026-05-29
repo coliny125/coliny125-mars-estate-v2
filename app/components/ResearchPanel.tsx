@@ -169,12 +169,12 @@ export default function ResearchPanel() {
         <div className="space-y-6">
           {(data?.items ?? []).map((item) => (
             <div key={item.id} className="border-l-2 border-transparent hover:border-brass-500/40 pl-3 transition-colors">
-              <div className="flex items-start justify-between gap-3 mb-1">
+              <div className="mb-1">
                 <h3 className="text-sm font-medium text-parchment-100 leading-snug">
                   {item.topic}
                 </h3>
                 {item.source && (
-                  <span className="eyebrow shrink-0">{item.source}</span>
+                  <span className="eyebrow opacity-60">{item.source}</span>
                 )}
               </div>
               <p className="text-sm text-parchment-300 leading-relaxed">

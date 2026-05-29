@@ -4,14 +4,13 @@ import TodosPanel from "./components/TodosPanel";
 import ResearchPanel from "./components/ResearchPanel";
 import GrowthMetricsPanel from "./components/GrowthMetricsPanel";
 import SystemHealthFooter from "./components/SystemHealthFooter";
-import ChatBar from "./components/ChatBar";
 
 export default function HomePage() {
   return (
     <main className="min-h-screen">
       <Header />
 
-      <div className="mx-auto max-w-7xl px-8 py-10 pb-40">
+      <div className="mx-auto max-w-7xl px-8 py-10">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <CommunicationsPanel />
           <TodosPanel />
@@ -35,8 +34,6 @@ export default function HomePage() {
           </div>
         </footer>
       </div>
-
-      <ChatBar />
     </main>
   );
 }

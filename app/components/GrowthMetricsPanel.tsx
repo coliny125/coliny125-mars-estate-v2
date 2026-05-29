@@ -1,60 +1,51 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Goal, GoalStatus } from "@/lib/goals";
-
-const STATUS_CONFIG: Record<GoalStatus, { dot: string; label: string }> = {
-  on_track: { dot: "bg-brass-500", label: "On Track" },
-  at_risk:  { dot: "bg-oxblood-500", label: "At Risk" },
-  completed:{ dot: "bg-brass-500/40", label: "Done" },
-  blocked:  { dot: "bg-parchment-500/40", label: "Blocked" },
-};
-
-const STATUS_OPTIONS: GoalStatus[] = ["on_track", "at_risk", "completed", "blocked"];
+import { relativeTime } from "@/lib/date";
+import type { PinnedGoal, GoalAssessment, GoalsAssessment } from "@/lib/goals";
 
 export default function GrowthMetricsPanel() {
-  const [goals, setGoals] = useState<Goal[]>([]);
+  const [goals, setGoals] = useState<PinnedGoal[]>([]);
+  const [assessment, setAssessment] = useState<GoalsAssessment | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<PinnedGoal[]>([]);
 
   useEffect(() => {
-    fetch("/api/goals")
-      .then((r) => r.json())
-      .then((d) => setGoals(d.goals ?? []))
-      .finally(() => setLoading(false));
+    Promise.all([
+      fetch("/api/goals/pinned").then((r) => r.json()),
+      fetch("/api/goals/assessment").then((r) => r.json()),
+    ]).then(([pinnedData, assessmentData]) => {
+      setGoals(pinnedData.goals ?? []);
+      setAssessment(assessmentData.assessment ?? null);
+    }).finally(() => setLoading(false));
   }, []);
 
-  async function updateStatus(id: string, status: GoalStatus) {
-    setGoals((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, status } : g))
-    );
-    await fetch(`/api/goals/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    });
+  function startEdit() {
+    setDraft(goals.map((g) => ({ ...g })));
+    setEditing(true);
   }
 
-  async function updateNotes(id: string, notes: string) {
-    setGoals((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, notes } : g))
-    );
-    await fetch(`/api/goals/${id}`, {
-      method: "PATCH",
+  async function saveEdit() {
+    const r = await fetch("/api/goals/pinned", {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notes }),
+      body: JSON.stringify({ goals: draft }),
     });
-    setEditing(null);
+    const data = await r.json();
+    setGoals(data.goals);
+    setEditing(false);
   }
 
-  const counts = goals.reduce(
-    (acc, g) => ({ ...acc, [g.status]: (acc[g.status] ?? 0) + 1 }),
-    {} as Record<string, number>
+  const assessMap = new Map<string, GoalAssessment>(
+    (assessment?.assessments ?? []).map((a) => [a.goal_id, a])
   );
 
-  const subLabel = loading
+  const subLabel = assessment
+    ? `Assessed ${relativeTime(assessment.generated_at)}`
+    : loading
     ? "Loading…"
-    : `${counts.completed ?? 0} done · ${counts.at_risk ?? 0} at risk · ${counts.blocked ?? 0} blocked`;
+    : "Not yet assessed — updates daily";
 
   return (
     <section className="panel-surface rounded-sm shadow-panel transition-colors">
@@ -66,111 +57,115 @@ export default function GrowthMetricsPanel() {
           </h2>
           <div className="text-xs text-parchment-500 mt-2">{subLabel}</div>
         </div>
+        <div className="shrink-0">
+          <button
+            type="button"
+            onClick={editing ? () => setEditing(false) : startEdit}
+            className="text-[11px] tracking-eyebrow uppercase text-parchment-400 hover:text-parchment-100 transition-colors"
+          >
+            {editing ? "Cancel" : "Edit goals"}
+          </button>
+        </div>
       </div>
 
       <div className="px-6 py-5 max-h-[32rem] overflow-y-auto panel-scroll">
-        <ul className="space-y-3">
-          {goals.map((goal) => {
-            const cfg = STATUS_CONFIG[goal.status];
-            const isEditingThis = editing === goal.id;
-            return (
-              <li key={goal.id} className="group border hairline rounded-sm px-4 py-3 bg-ink-700/30">
-                <div className="flex items-start gap-3">
-                  <span
-                    className={`mt-1.5 inline-block h-1.5 w-1.5 rounded-full shrink-0 ${cfg.dot}`}
-                    aria-hidden
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                      <span className="text-sm font-medium text-parchment-100 leading-snug">
-                        {goal.title}
-                      </span>
-                      {goal.target && (
-                        <span className="eyebrow opacity-60">{goal.target}</span>
+        {editing ? (
+          <div className="space-y-4">
+            <p className="text-xs text-parchment-500">
+              Set your 3 long-term goals. The AI assesses daily progress toward each.
+            </p>
+            {draft.map((g, i) => (
+              <div key={g.id} className="space-y-1.5">
+                <div className="eyebrow">Goal {i + 1}</div>
+                <input
+                  type="text"
+                  value={g.title}
+                  onChange={(e) =>
+                    setDraft((prev) =>
+                      prev.map((p, j) => j === i ? { ...p, title: e.target.value } : p)
+                    )
+                  }
+                  placeholder="Goal title…"
+                  className="w-full bg-ink-700 hairline border rounded-sm px-3 py-2 text-sm text-parchment-100 placeholder:text-parchment-500 focus:outline-none focus:border-brass-500"
+                />
+                <input
+                  type="text"
+                  value={g.horizon}
+                  onChange={(e) =>
+                    setDraft((prev) =>
+                      prev.map((p, j) => j === i ? { ...p, horizon: e.target.value } : p)
+                    )
+                  }
+                  placeholder="Horizon (e.g. 2027, Q4 2026)…"
+                  className="w-full bg-ink-700 hairline border rounded-sm px-3 py-2 text-sm text-parchment-400 placeholder:text-parchment-500 focus:outline-none focus:border-brass-500"
+                />
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={saveEdit}
+              className="text-[11px] tracking-eyebrow uppercase border hairline-strong rounded-sm px-3 py-1.5 text-parchment-100 hover:bg-ink-700 transition-colors"
+            >
+              Save
+            </button>
+          </div>
+        ) : (
+          <ul className="space-y-5">
+            {goals.map((goal) => {
+              const a = assessMap.get(goal.id);
+              return (
+                <li key={goal.id} className="border-l-2 border-brass-500/25 pl-4">
+                  <div className="mb-2">
+                    <span className="text-sm font-medium text-parchment-100">
+                      {goal.title}
+                    </span>
+                    {goal.horizon && (
+                      <span className="ml-2 eyebrow opacity-50">{goal.horizon}</span>
+                    )}
+                  </div>
+
+                  {!a && (
+                    <p className="text-xs text-parchment-500/60 italic">
+                      Daily assessment pending…
+                    </p>
+                  )}
+
+                  {a && (
+                    <div className="space-y-2">
+                      {a.toward.length > 0 && (
+                        <div>
+                          <div className="eyebrow text-brass-500/80 mb-1">Moving toward</div>
+                          <ul className="space-y-0.5">
+                            {a.toward.map((b, i) => (
+                              <li key={i} className="flex gap-2 text-xs text-parchment-300 leading-snug">
+                                <span className="text-brass-500 shrink-0 mt-0.5">↑</span>
+                                {b}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {a.away.length > 0 && (
+                        <div>
+                          <div className="eyebrow text-oxblood-500/80 mb-1">Risks / gaps</div>
+                          <ul className="space-y-0.5">
+                            {a.away.map((b, i) => (
+                              <li key={i} className="flex gap-2 text-xs text-parchment-400 leading-snug">
+                                <span className="text-oxblood-400 shrink-0 mt-0.5">↓</span>
+                                {b}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                     </div>
-
-                    {goal.notes && !isEditingThis && (
-                      <p className="text-xs text-parchment-400 leading-snug mt-0.5">
-                        {goal.notes}
-                      </p>
-                    )}
-
-                    {isEditingThis && (
-                      <NoteEditor
-                        initial={goal.notes ?? ""}
-                        onSave={(notes) => updateNotes(goal.id, notes)}
-                        onCancel={() => setEditing(null)}
-                      />
-                    )}
-                  </div>
-
-                  <div className="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <select
-                      value={goal.status}
-                      onChange={(e) => updateStatus(goal.id, e.target.value as GoalStatus)}
-                      className="bg-ink-700 hairline border rounded-sm px-1.5 py-0.5 text-[10px] tracking-eyebrow uppercase text-parchment-300 focus:outline-none focus:border-brass-500 cursor-pointer"
-                      aria-label="Goal status"
-                    >
-                      {STATUS_OPTIONS.map((s) => (
-                        <option key={s} value={s}>
-                          {STATUS_CONFIG[s].label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setEditing(isEditingThis ? null : goal.id)}
-                      className="text-[10px] tracking-eyebrow uppercase text-parchment-500/50 hover:text-parchment-200 transition-colors"
-                    >
-                      Notes
-                    </button>
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </section>
-  );
-}
-
-function NoteEditor({
-  initial,
-  onSave,
-  onCancel,
-}: {
-  initial: string;
-  onSave: (v: string) => void;
-  onCancel: () => void;
-}) {
-  const [value, setValue] = useState(initial);
-  return (
-    <div className="mt-2">
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        rows={2}
-        className="w-full bg-transparent text-xs text-parchment-100 placeholder:text-parchment-500 border hairline rounded-sm px-2 py-1.5 focus:outline-none focus:border-brass-500 resize-none"
-        autoFocus
-      />
-      <div className="flex gap-2 mt-1.5">
-        <button
-          type="button"
-          onClick={() => onSave(value)}
-          className="text-[10px] tracking-eyebrow uppercase border hairline rounded-sm px-2 py-1 text-parchment-100 hover:bg-ink-700 transition-colors"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-[10px] tracking-eyebrow uppercase text-parchment-500 hover:text-parchment-200 transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
   );
 }

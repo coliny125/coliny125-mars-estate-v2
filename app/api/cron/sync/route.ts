@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 import { runSync, BRIEFING_KEY } from "@/lib/sync";
 import { autoRunResearch, isResearchStale } from "@/lib/research";
-import { autoAssessGoals, areGoalsStale } from "@/lib/goals";
+import { autoAssessPinnedGoals, areGoalsStale } from "@/lib/goals";
 import type { StoredBriefing } from "@/lib/sync";
 
 export const maxDuration = 60;
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     const [briefing] = await Promise.all([
       runSync(),
       researchStale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
-      goalsStale ? autoAssessGoals().catch(() => null) : Promise.resolve(null),
+      goalsStale ? autoAssessPinnedGoals().catch(() => null) : Promise.resolve(null),
     ]);
 
     return NextResponse.json({
