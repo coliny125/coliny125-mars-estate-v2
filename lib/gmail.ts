@@ -161,18 +161,22 @@ async function fetchThreadFull(
 
 export async function fetchRecentThreads(
   userId: string,
-  maxResults = 40
+  maxResults = 40,
+  opts: { newerThanDays?: number } = {}
 ): Promise<GmailThread[]> {
   const token = await getValidAccessToken(userId);
   if (!token) return [];
 
+  let q = "-category:promotions -category:updates";
+  if (opts.newerThanDays) q += ` newer_than:${opts.newerThanDays}d`;
+
   const listRes = await fetch(
-    `https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=${maxResults}&labelIds=INBOX&q=-category:promotions -category:updates`,
+    `https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=${maxResults}&labelIds=INBOX&q=${encodeURIComponent(q)}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const listData = await listRes.json();
   const threadIds: string[] = (listData.threads ?? [])
-    .slice(0, 20)
+    .slice(0, 25)
     .map((t: { id: string }) => t.id);
 
   const settled = await Promise.allSettled(
