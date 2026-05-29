@@ -13,7 +13,7 @@ export async function GET() {
   return NextResponse.json({ goals });
 }
 
-export async function PUT(req: NextRequest) {
+export async function POST(req: NextRequest) {
   const body = await req.json();
   const goals: PinnedGoal[] = (body.goals ?? []).slice(0, 3).map(
     (g: PinnedGoal, i: number) => ({

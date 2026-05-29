@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
 
     // Briefing always runs; research + goals run once per day when stale
     const [briefing] = await Promise.all([
-      runSync(),
+      runSync({ extended: true }),
       researchStale ? autoRunResearch().catch(() => null) : Promise.resolve(null),
       goalsStale ? autoAssessPinnedGoals().catch(() => null) : Promise.resolve(null),
     ]);

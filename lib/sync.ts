@@ -22,7 +22,7 @@ export interface StoredBriefing {
 
 export const BRIEFING_KEY = "briefing:latest";
 
-export async function runSync(): Promise<StoredBriefing> {
+export async function runSync(opts: { extended?: boolean } = {}): Promise<StoredBriefing> {
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
 
@@ -99,11 +99,10 @@ Return JSON: { "summary": "...", "items": [...] }`;
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 8000,
-    thinking: {
-      type: "enabled",
-      budget_tokens: 5000,
-    },
+    max_tokens: opts.extended ? 8000 : 2000,
+    ...(opts.extended
+      ? { thinking: { type: "enabled", budget_tokens: 5000 } }
+      : {}),
     messages: [{ role: "user", content: prompt }],
   });
 

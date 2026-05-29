@@ -49,7 +49,7 @@ export default function GrowthMetricsPanel() {
     setSaveError(null);
     try {
       const r = await fetch("/api/goals/pinned", {
-        method: "PUT",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ goals: draft }),
       });
