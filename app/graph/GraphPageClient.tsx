@@ -39,6 +39,7 @@ export default function GraphPageClient() {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [building, setBuilding] = useState(false);
+  const [buildPhase, setBuildPhase] = useState("");
   const [buildError, setBuildError] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [filter, setFilter] = useState<string>("all");
@@ -59,15 +60,27 @@ export default function GraphPageClient() {
     setBuilding(true);
     setBuildError(null);
     try {
-      const r = await fetch("/api/graph/build", { method: "POST" });
-      if (!r.ok) throw new Error(`Error ${r.status}`);
-      const r2 = await fetch("/api/graph");
-      const d = await r2.json();
-      setGraphData(d);
+      // Phase 1: nodes (≤60s)
+      setBuildPhase("Extracting entities…");
+      const r1 = await fetch("/api/graph/build", { method: "POST" });
+      if (!r1.ok) {
+        const d = await r1.json().catch(() => ({}));
+        throw new Error(d.error ?? `Node build error ${r1.status}`);
+      }
+      // Phase 2: edges (≤60s)
+      setBuildPhase("Mapping relationships…");
+      const r2 = await fetch("/api/graph/edges", { method: "POST" });
+      if (!r2.ok) {
+        const d = await r2.json().catch(() => ({}));
+        throw new Error(d.error ?? `Edge build error ${r2.status}`);
+      }
+      const r3 = await fetch("/api/graph");
+      setGraphData(await r3.json());
     } catch (e) {
       setBuildError(e instanceof Error ? e.message : "Build failed");
     } finally {
       setBuilding(false);
+      setBuildPhase("");
     }
   }
 
@@ -197,7 +210,7 @@ export default function GraphPageClient() {
           )}
           {building && (
             <span className="text-xs text-parchment-500 animate-pulse">
-              Extracting entities — up to ~2 min…
+              {buildPhase || "Building…"} (~2 min total)
             </span>
           )}
           <button

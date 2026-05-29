@@ -94,94 +94,90 @@ export async function isGraphStale(maxAgeHours = 24): Promise<boolean> {
 }
 
 // ── Graph builder ─────────────────────────────────────────────────────────────
+// Split into two phases (nodes, then edges) so each fits within the Hobby-plan
+// 60s function limit. The full two-call build runs ~90s total — too long for a
+// single serverless request — so the client calls these sequentially.
 
-export async function buildGraph(
-  userId: string,
-  opts: { briefingItems?: string[]; openTodos?: string[] } = {}
-): Promise<GraphData> {
-  const apiKey = process.env.ANTHROPIC_API_KEY!;
-  const client = new Anthropic({ apiKey });
+type RawNode = { id: string; type: NodeType; label: string; desc?: string; email?: string };
+type RawEdge = { s: string; t: string; r: RelationType; w?: number };
 
-  // Load all KB docs — cap each doc at 800 chars (entities appear early)
-  // Use allSettled so a single KV failure doesn't abort the whole build
+// Robust extractor: scans for the named array, then collects every COMPLETE
+// {...} object via brace-counting. Survives truncation (keeps whole objects up
+// to the cutoff) and stray non-ASCII characters (sanitized first). Critical:
+// the edges response routinely truncates at max_tokens, and a regex parser
+// requiring a closing bracket would silently return [].
+function extractObjects<T>(text: string, key: "nodes" | "edges"): T[] {
+  const clean = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+  const keyIdx = clean.indexOf(`"${key}"`);
+  if (keyIdx < 0) return [];
+  const bracket = clean.indexOf("[", keyIdx);
+  if (bracket < 0) return [];
+
+  const objs: T[] = [];
+  let depth = 0;
+  let cur = "";
+  let inObj = false;
+  for (let i = bracket + 1; i < clean.length; i++) {
+    const c = clean[i];
+    if (c === "{") {
+      if (depth === 0) {
+        inObj = true;
+        cur = "";
+      }
+      depth++;
+      cur += c;
+    } else if (c === "}") {
+      depth--;
+      cur += c;
+      if (depth === 0 && inObj) {
+        try {
+          objs.push(JSON.parse(cur) as T);
+        } catch {
+          /* skip malformed object */
+        }
+        inObj = false;
+      }
+    } else if (inObj) {
+      cur += c;
+    } else if (c === "]" && depth === 0) {
+      break;
+    }
+  }
+  return objs;
+}
+
+async function loadKbContext(): Promise<string> {
   const DOC_CHAR_CAP = 800;
   const index = await getKBIndex();
   const settled = await Promise.allSettled(
     index.map(async (entry) => {
       const doc = await getKBDoc(entry.slug);
       if (!doc) return null;
-      const excerpt = doc.content.slice(0, DOC_CHAR_CAP);
-      return `## ${doc.title} [${entry.section}]\n${excerpt}`;
+      return `## ${doc.title} [${entry.section}]\n${doc.content.slice(0, DOC_CHAR_CAP)}`;
     })
   );
-  const rawDocs = settled
+  return settled
     .filter((r): r is PromiseFulfilledResult<string | null> => r.status === "fulfilled")
     .map((r) => r.value)
-    .filter((v): v is string => v !== null);
+    .filter((v): v is string => v !== null)
+    .join("\n\n---\n\n");
+}
 
-  const kbContext = rawDocs.join("\n\n---\n\n");
+// ── Phase 1: nodes ───────────────────────────────────────────────────────────
+export async function buildGraphNodes(
+  opts: { briefingItems?: string[]; openTodos?: string[] } = {}
+): Promise<GraphData> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+  const kbContext = await loadKbContext();
 
   const activityContext = [
-    opts.briefingItems?.length
-      ? `Recent briefing items:\n${opts.briefingItems.join("\n")}`
-      : "",
-    opts.openTodos?.length
-      ? `Open todos:\n${opts.openTodos.join("\n")}`
-      : "",
+    opts.briefingItems?.length ? `Recent briefing items:\n${opts.briefingItems.join("\n")}` : "",
+    opts.openTodos?.length ? `Open todos:\n${opts.openTodos.join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
 
-  type RawNode = { id: string; type: NodeType; label: string; desc?: string; email?: string };
-  type RawEdge = { s: string; t: string; r: RelationType; w?: number };
-
-  // Robust extractor: scans for the named array, then collects every COMPLETE
-  // {...} object via brace-counting. Survives truncation (stops at the last
-  // whole object) and stray non-ASCII characters (sanitized first). This is the
-  // critical fix — the edges response routinely truncates at max_tokens, and a
-  // regex parser requiring a closing bracket would silently return [].
-  function extractObjects<T>(text: string, key: "nodes" | "edges"): T[] {
-    const clean = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
-    const keyIdx = clean.indexOf(`"${key}"`);
-    if (keyIdx < 0) return [];
-    const bracket = clean.indexOf("[", keyIdx);
-    if (bracket < 0) return [];
-
-    const objs: T[] = [];
-    let depth = 0;
-    let cur = "";
-    let inObj = false;
-    for (let i = bracket + 1; i < clean.length; i++) {
-      const c = clean[i];
-      if (c === "{") {
-        if (depth === 0) {
-          inObj = true;
-          cur = "";
-        }
-        depth++;
-        cur += c;
-      } else if (c === "}") {
-        depth--;
-        cur += c;
-        if (depth === 0 && inObj) {
-          try {
-            objs.push(JSON.parse(cur) as T);
-          } catch {
-            /* skip malformed object */
-          }
-          inObj = false;
-        }
-      } else if (inObj) {
-        cur += c;
-      } else if (c === "]" && depth === 0) {
-        break; // end of the target array
-      }
-    }
-    return objs;
-  }
-
-  // ── Call 1: extract nodes ───────────────────────────────────────────────────
-  const nodesResp = await client.messages.create({
+  const resp = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 6000,
     messages: [
@@ -204,24 +200,50 @@ Be thorough — all named people from contacts, all projects, all orgs, all majo
       },
     ],
   });
-  const nodesText =
-    nodesResp.content.find((b) => b.type === "text")?.type === "text"
-      ? (nodesResp.content.find((b) => b.type === "text") as { text: string }).text
-      : "";
-  const rawNodes = extractObjects<RawNode>(nodesText, "nodes").filter(
-    (n) => n && n.id && n.label
-  );
+  const text = resp.content.find((b) => b.type === "text");
+  const rawNodes = extractObjects<RawNode>(
+    text?.type === "text" ? text.text : "",
+    "nodes"
+  ).filter((n) => n && n.id && n.label);
+
   if (rawNodes.length === 0) {
-    throw new Error("Graph builder returned no nodes — try Rebuild again.");
+    throw new Error("Graph builder returned no nodes — try again.");
   }
 
-  // ── Call 2: extract edges given the node list ────────────────────────────────
-  // Pass bare ids (comma-separated) — verified to maximize exact-id reuse by the model.
-  const nodeList = rawNodes.map((n) => n.id).join(", ");
+  const now = new Date().toISOString();
+  // Save nodes with empty edges; phase 2 fills edges in.
+  const graph: GraphData = {
+    nodes: rawNodes.map((n) => ({
+      id: n.id,
+      type: n.type,
+      label: n.label,
+      description: n.desc,
+      email: n.email,
+      last_seen: now,
+      sources: [],
+      mention_count: 0,
+    })),
+    edges: [],
+    built_at: now,
+  };
+  await saveGraph(graph);
+  return graph;
+}
 
-  const edgesResp = await client.messages.create({
+// ── Phase 2: edges (operates on the already-saved nodes) ─────────────────────
+export async function buildGraphEdges(): Promise<GraphData> {
+  const graph = await getGraph();
+  if (!graph || graph.nodes.length === 0) {
+    throw new Error("No nodes to connect — build nodes first.");
+  }
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
+  // Bare ids maximize exact-id reuse by the model.
+  const nodeList = graph.nodes.map((n) => n.id).join(", ");
+
+  const resp = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 6000,
+    max_tokens: 8000,
     messages: [
       {
         role: "user",
@@ -240,31 +262,22 @@ Be thorough — connect each person to their org, each person to the projects th
       },
     ],
   });
-  const edgesText =
-    edgesResp.content.find((b) => b.type === "text")?.type === "text"
-      ? (edgesResp.content.find((b) => b.type === "text") as { text: string }).text
-      : "";
-  const rawEdges = extractObjects<RawEdge>(edgesText, "edges").filter(
-    (e) => e && e.s && e.t
-  );
+  const text = resp.content.find((b) => b.type === "text");
+  const rawEdges = extractObjects<RawEdge>(
+    text?.type === "text" ? text.text : "",
+    "edges"
+  ).filter((e) => e && e.s && e.t);
 
   const now = new Date().toISOString();
 
-  // ── Entity resolution (methodology step 5) ──────────────────────────────────
-  // Resolve each edge endpoint to a real node id: exact match first, then a
-  // normalized match (strip non-alphanumerics) so "heidi_barrett" → "heidi-barrett".
-  const idSet = new Set(rawNodes.map((n) => n.id));
+  // Entity resolution: exact id, then normalized match.
+  const idSet = new Set(graph.nodes.map((n) => n.id));
   const normMap = new Map<string, string>();
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  for (const n of rawNodes) normMap.set(norm(n.id), n.id);
+  for (const n of graph.nodes) normMap.set(norm(n.id), n.id);
+  const resolve = (raw: string): string | null =>
+    idSet.has(raw) ? raw : normMap.get(norm(raw)) ?? null;
 
-  const resolve = (raw: string): string | null => {
-    if (idSet.has(raw)) return raw;
-    const byNorm = normMap.get(norm(raw));
-    return byNorm ?? null;
-  };
-
-  // Dedupe, drop self-loops and unresolvable endpoints
   const seen = new Set<string>();
   const resolvedEdges: GraphEdge[] = [];
   for (const e of rawEdges) {
@@ -284,30 +297,20 @@ Be thorough — connect each person to their org, each person to the projects th
     });
   }
 
-  // Degree (connection count) → "heat" metric and node sizing
+  // Degree → heat metric / node sizing
   const degree: Record<string, number> = {};
   for (const e of resolvedEdges) {
     degree[e.source] = (degree[e.source] ?? 0) + 1;
     degree[e.target] = (degree[e.target] ?? 0) + 1;
   }
 
-  const graph: GraphData = {
-    nodes: rawNodes.map((n) => ({
-      id: n.id,
-      type: n.type,
-      label: n.label,
-      description: n.desc,
-      email: n.email,
-      last_seen: now,
-      sources: [],
-      mention_count: degree[n.id] ?? 0,
-    })),
+  const updated: GraphData = {
+    nodes: graph.nodes.map((n) => ({ ...n, mention_count: degree[n.id] ?? 0 })),
     edges: resolvedEdges,
     built_at: now,
   };
-
-  await saveGraph(graph);
-  return graph;
+  await saveGraph(updated);
+  return updated;
 }
 
 // ── Incremental update from enrichment ───────────────────────────────────────
