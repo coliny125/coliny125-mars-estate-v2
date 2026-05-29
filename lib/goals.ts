@@ -1,6 +1,9 @@
 import { kv } from "@vercel/kv";
 import Anthropic from "@anthropic-ai/sdk";
 import { getKBDoc } from "@/lib/kb";
+import { getPinnedGoals } from "@/lib/pinned-goals";
+export type { PinnedGoal } from "@/lib/pinned-goals";
+export { PINNED_GOALS_KEY, DEFAULT_PINNED_GOALS } from "@/lib/pinned-goals";
 
 // ── Legacy goal types (kept for existing API routes) ─────────────────────────
 export type GoalStatus = "on_track" | "at_risk" | "completed" | "blocked";
@@ -27,13 +30,7 @@ export async function saveGoals(goals: Goal[]): Promise<void> {
   await kv.set(GOALS_KEY, JSON.stringify(goals));
 }
 
-// ── Pinned goals (new panel) ──────────────────────────────────────────────────
-export interface PinnedGoal {
-  id: string;
-  title: string;
-  horizon: string;
-}
-
+// ── Pinned goals assessment ───────────────────────────────────────────────────
 export interface GoalAssessment {
   goal_id: string;
   goal_title: string;
@@ -46,33 +43,8 @@ export interface GoalsAssessment {
   generated_at: string;
 }
 
-export const PINNED_GOALS_KEY = "goals:pinned";
 export const GOALS_ASSESSMENT_KEY = "goals:assessment";
 const GOALS_ASSESSED_KEY = "goals:last_assessed";
-
-export const DEFAULT_PINNED_GOALS: PinnedGoal[] = [
-  {
-    id: "pinned-1",
-    title: "Become a top 5 Napa Valley estate within 5 years",
-    horizon: "2027",
-  },
-  {
-    id: "pinned-2",
-    title: "Launch the Mars Founding Circle membership program",
-    horizon: "Thanksgiving 2026",
-  },
-  {
-    id: "pinned-3",
-    title: "Establish Mars Estate as a lifestyle brand, not just a winery",
-    horizon: "5-year horizon",
-  },
-];
-
-export async function getPinnedGoals(): Promise<PinnedGoal[]> {
-  const raw = await kv.get<string>(PINNED_GOALS_KEY);
-  if (!raw) return DEFAULT_PINNED_GOALS;
-  return typeof raw === "string" ? JSON.parse(raw) : (raw as PinnedGoal[]);
-}
 
 export async function areGoalsStale(maxAgeHours = 20): Promise<boolean> {
   const ts = await kv.get<string>(GOALS_ASSESSED_KEY);

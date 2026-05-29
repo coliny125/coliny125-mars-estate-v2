@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
-import { PINNED_GOALS_KEY, DEFAULT_PINNED_GOALS } from "@/lib/goals";
-import type { PinnedGoal } from "@/lib/goals";
+import { PINNED_GOALS_KEY, DEFAULT_PINNED_GOALS } from "@/lib/pinned-goals";
+import type { PinnedGoal } from "@/lib/pinned-goals";
 
 export async function GET() {
   const raw = await kv.get<string>(PINNED_GOALS_KEY);

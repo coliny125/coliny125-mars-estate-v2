@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { relativeTime } from "@/lib/date";
-import type { PinnedGoal, GoalAssessment, GoalsAssessment } from "@/lib/goals";
+import type { PinnedGoal } from "@/lib/pinned-goals";
+import type { GoalAssessment, GoalsAssessment } from "@/lib/goals";
 
 export default function GrowthMetricsPanel() {
   const [goals, setGoals] = useState<PinnedGoal[]>([]);
