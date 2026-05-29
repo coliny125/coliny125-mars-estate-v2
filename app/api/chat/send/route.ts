@@ -1,21 +1,39 @@
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { threadStore, todoStore } from "@/lib/storage";
+import { getKBIndex, getKBDoc } from "@/lib/kb";
 import type { Priority } from "@/lib/storage";
+import type { KBIndexEntry } from "@/lib/kb";
 
-const SYSTEM_PROMPT = `You are the Mars Estate Assistant — an intelligent operations co-pilot for Mars Estate, a boutique Napa Valley winery on Howell Mountain.
+function buildSystemPrompt(kbIndex: KBIndexEntry[]): string {
+  const sections: Record<string, string[]> = {};
+  for (const entry of kbIndex) {
+    const s = entry.section || "General";
+    if (!sections[s]) sections[s] = [];
+    sections[s].push(`  • ${entry.slug} — ${entry.title}`);
+  }
 
-You help the winery owner manage:
-- Communications (emails, meetings, follow-ups)
-- Immediate to-dos and task management
-- Research on wine industry trends, regulations, market conditions
-- Harvest planning, vineyard management
-- DTC sales, mailing list, and wholesale relationships
-- Tasting room operations
+  const kbDir = Object.entries(sections)
+    .map(([section, entries]) => `${section}:\n${entries.join("\n")}`)
+    .join("\n\n");
 
-You have access to a tool to add todos when asked. Be concise, direct, and winery-savvy. When referencing emails or meetings you don't have direct access to, acknowledge that and offer to help think through the situation.`;
+  return `You are the Mars Estate Assistant — an intelligent operations co-pilot for Mars Estate, a boutique Napa Valley winery on Howell Mountain.
 
-const TOOLS: Anthropic.Tool[] = [
+You have access to a structured knowledge base about Mars Estate. Use the get_kb_doc tool to retrieve specific documents when you need accurate details to answer a question. Always look up before guessing.
+
+## Knowledge Base Directory
+${kbDir}
+
+## Your Capabilities
+- Answer questions about Mars Estate's operations, strategy, people, and status
+- Manage to-dos (add tasks via add_todo)
+- Look up contacts, vendors, partners, contracts, and internal documents
+- Provide context-aware guidance on winery operations
+
+Be concise and direct. Use get_kb_doc whenever the question touches information that may be in the knowledge base.`;
+}
+
+const BASE_TOOLS: Anthropic.Tool[] = [
   {
     name: "add_todo",
     description: "Add a task to the immediate to-do list",
@@ -32,15 +50,30 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["text"],
     },
   },
+  {
+    name: "get_kb_doc",
+    description:
+      "Retrieve a document from the Mars Estate knowledge base by its slug. Check the Knowledge Base Directory in your system prompt for available slugs.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slug: {
+          type: "string",
+          description:
+            "The document slug, e.g. 'strategy/company-overview' or 'contacts/core-team'",
+        },
+      },
+      required: ["slug"],
+    },
+  },
 ];
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({ error: "Missing ANTHROPIC_API_KEY" }),
-      { status: 500 }
-    );
+    return new Response(JSON.stringify({ error: "Missing ANTHROPIC_API_KEY" }), {
+      status: 500,
+    });
   }
 
   const body = await req.json();
@@ -52,12 +85,8 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  let thread = existingThreadId
-    ? await threadStore.get(existingThreadId)
-    : null;
-  if (!thread) {
-    thread = await threadStore.create();
-  }
+  let thread = existingThreadId ? await threadStore.get(existingThreadId) : null;
+  if (!thread) thread = await threadStore.create();
 
   await threadStore.addMessage(thread.id, "user", message);
 
@@ -67,6 +96,9 @@ export async function POST(req: NextRequest) {
     content: m.content,
   }));
 
+  const kbIndex = await getKBIndex();
+  const systemPrompt = buildSystemPrompt(kbIndex);
+
   const client = new Anthropic({ apiKey });
   const threadId = thread.id;
 
@@ -74,88 +106,69 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const send = (data: object) => {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
-        );
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
       try {
         let fullContent = "";
-        const toolCallsPending: {
-          id: string;
-          name: string;
-          input: Record<string, string>;
-        }[] = [];
-
         const messages: Anthropic.MessageParam[] = [
           ...history,
           { role: "user", content: message },
         ];
 
-        const response = await client.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1024,
-          system: SYSTEM_PROMPT,
-          tools: TOOLS,
-          messages,
-        });
-
-        for (const block of response.content) {
-          if (block.type === "tool_use") {
-            toolCallsPending.push({
-              id: block.id,
-              name: block.name,
-              input: block.input as Record<string, string>,
-            });
-          }
-        }
-
-        const toolResultContents: Anthropic.ToolResultBlockParam[] = [];
-        for (const call of toolCallsPending) {
-          if (call.name === "add_todo") {
-            const { text, priority = "M" } = call.input;
-            await todoStore.add(text, priority as Priority);
-            const msg = `Added to-do: "${text}"`;
-            send({ content: `\n✓ ${msg}\n` });
-            fullContent += `\n✓ ${msg}\n`;
-            toolResultContents.push({
-              type: "tool_result",
-              tool_use_id: call.id,
-              content: msg,
-            });
-          }
-        }
-
-        let textResponse = "";
-        if (response.stop_reason === "tool_use" && toolCallsPending.length > 0) {
-          const followUp = await client.messages.create({
+        // Agentic loop — handles chained tool calls (e.g. multiple get_kb_doc)
+        let iterations = 0;
+        while (iterations++ < 6) {
+          const response = await client.messages.create({
             model: "claude-sonnet-4-6",
-            max_tokens: 512,
-            system: SYSTEM_PROMPT,
-            messages: [
-              ...messages,
-              { role: "assistant", content: response.content },
-              { role: "user", content: toolResultContents },
-            ],
+            max_tokens: 1024,
+            system: systemPrompt,
+            tools: BASE_TOOLS,
+            messages,
           });
-          for (const block of followUp.content) {
-            if (block.type === "text") textResponse += block.text;
-          }
-        } else {
-          for (const block of response.content) {
-            if (block.type === "text") textResponse += block.text;
-          }
-        }
 
-        if (textResponse) {
-          const words = textResponse.split(/(\s+)/);
-          for (const word of words) {
-            if (word) {
-              send({ content: word });
-              fullContent += word;
-              await new Promise((r) => setTimeout(r, 15));
+          if (response.stop_reason !== "tool_use") {
+            // Final text response — stream it
+            for (const block of response.content) {
+              if (block.type === "text") {
+                for (const word of block.text.split(/(\s+)/)) {
+                  if (word) {
+                    send({ content: word });
+                    fullContent += word;
+                    await new Promise((r) => setTimeout(r, 15));
+                  }
+                }
+              }
+            }
+            break;
+          }
+
+          // Execute tool calls
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const block of response.content) {
+            if (block.type !== "tool_use") continue;
+            const input = block.input as Record<string, string>;
+
+            if (block.name === "add_todo") {
+              const { text, priority = "M" } = input;
+              await todoStore.add(text, priority as Priority);
+              const msg = `Added to-do: "${text}"`;
+              send({ content: `\n✓ ${msg}\n` });
+              fullContent += `\n✓ ${msg}\n`;
+              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: msg });
+            } else if (block.name === "get_kb_doc") {
+              const doc = await getKBDoc(input.slug);
+              const result = doc
+                ? `# ${doc.title}\n\n${doc.content}`
+                : `No document found for slug: ${input.slug}`;
+              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
             }
           }
+
+          messages.push(
+            { role: "assistant", content: response.content },
+            { role: "user", content: toolResults }
+          );
         }
 
         await threadStore.addMessage(threadId, "assistant", fullContent);
